@@ -1,30 +1,318 @@
-"""Main application window (stub shell for M0/M1)."""
+"""Main application window — project list + file panel (M1)."""
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
 
 from docuwizard import __version__
-from docuwizard.paths import data_dir
+from docuwizard.models import Project, ProjectFile
+from docuwizard.services import files as file_service
+from docuwizard.services import projects as project_service
+from docuwizard.services.files import FileError
+from docuwizard.services.projects import ProjectError
+
+
+class DropFileList(QListWidget):
+    """File list that accepts drag-and-drop of local files."""
+
+    def __init__(self, on_paths, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._on_paths = on_paths
+        self.setAcceptDrops(True)
+        self.setAlternatingRowColors(True)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        paths = [
+            Path(url.toLocalFile())
+            for url in event.mimeData().urls()
+            if url.isLocalFile()
+        ]
+        files = [p for p in paths if p.is_file()]
+        if files:
+            self._on_paths(files)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"DocuWizard {__version__}")
-        self.resize(960, 640)
+        self.resize(1100, 700)
+        self._selected_project_id: str | None = None
 
-        root = QWidget()
-        layout = QVBoxLayout(root)
-        title = QLabel("DocuWizard")
-        title.setStyleSheet("font-size: 28px; font-weight: 600;")
-        subtitle = QLabel(
-            "로컬 문서 기반 RAG 질의응답 앱입니다.\n"
-            f"데이터 경로: {data_dir()}\n"
-            "프로젝트·파일·채팅 UI는 이후 이슈에서 구현됩니다."
+        self._build_toolbar()
+        self._build_body()
+        self.refresh_projects()
+
+    def _build_toolbar(self) -> None:
+        toolbar = QToolBar("메인")
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+
+        new_action = QAction("새 프로젝트", self)
+        new_action.triggered.connect(self.create_project)
+        toolbar.addAction(new_action)
+
+        rename_action = QAction("이름 변경", self)
+        rename_action.triggered.connect(self.rename_project)
+        toolbar.addAction(rename_action)
+
+        delete_action = QAction("프로젝트 삭제", self)
+        delete_action.triggered.connect(self.delete_project)
+        toolbar.addAction(delete_action)
+
+    def _build_body(self) -> None:
+        splitter = QSplitter()
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.addWidget(QLabel("프로젝트"))
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("프로젝트 검색…")
+        self.search_edit.textChanged.connect(self.refresh_projects)
+        left_layout.addWidget(self.search_edit)
+        self.project_list = QListWidget()
+        self.project_list.currentItemChanged.connect(self._on_project_selected)
+        left_layout.addWidget(self.project_list)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        self.detail_title = QLabel("프로젝트를 선택하세요")
+        self.detail_title.setStyleSheet("font-size: 18px; font-weight: 600;")
+        self.detail_desc = QLabel("")
+        self.detail_desc.setWordWrap(True)
+        right_layout.addWidget(self.detail_title)
+        right_layout.addWidget(self.detail_desc)
+
+        file_header = QHBoxLayout()
+        file_header.addWidget(QLabel("파일"))
+        file_header.addStretch(1)
+        self.add_files_btn = QPushButton("파일 추가…")
+        self.add_files_btn.clicked.connect(self.add_files_dialog)
+        self.add_files_btn.setEnabled(False)
+        self.delete_file_btn = QPushButton("선택 파일 삭제")
+        self.delete_file_btn.clicked.connect(self.delete_selected_file)
+        self.delete_file_btn.setEnabled(False)
+        file_header.addWidget(self.add_files_btn)
+        file_header.addWidget(self.delete_file_btn)
+        right_layout.addLayout(file_header)
+
+        self.file_list = DropFileList(self.import_paths)
+        self.file_list.setEnabled(False)
+        right_layout.addWidget(self.file_list)
+        hint = QLabel("파일을 이 목록으로 드래그앤드롭하거나 ‘파일 추가’를 사용하세요.")
+        hint.setStyleSheet("color: #666;")
+        right_layout.addWidget(hint)
+
+        splitter.addWidget(left)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
+        self.setCentralWidget(splitter)
+
+    def refresh_projects(self) -> None:
+        query = self.search_edit.text().strip() or None
+        current_id = self._selected_project_id
+        self.project_list.blockSignals(True)
+        self.project_list.clear()
+        for project in project_service.list_projects(query):
+            item = QListWidgetItem(project.name)
+            item.setData(Qt.ItemDataRole.UserRole, project.id)
+            item.setToolTip(project.description or project.id)
+            self.project_list.addItem(item)
+            if project.id == current_id:
+                self.project_list.setCurrentItem(item)
+        self.project_list.blockSignals(False)
+        if self.project_list.currentItem() is None:
+            self._clear_detail()
+        elif current_id:
+            self._load_project_detail(current_id)
+
+    def create_project(self) -> None:
+        name, ok = QInputDialog.getText(self, "새 프로젝트", "프로젝트 이름:")
+        if not ok or not name.strip():
+            return
+        description, ok = QInputDialog.getMultiLineText(
+            self, "새 프로젝트", "설명 (선택):"
         )
-        subtitle.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        layout.addStretch(1)
-        self.setCentralWidget(root)
+        if not ok:
+            return
+        try:
+            project = project_service.create_project(name, description)
+        except ProjectError as exc:
+            QMessageBox.warning(self, "오류", str(exc))
+            return
+        self._selected_project_id = project.id
+        self.refresh_projects()
+
+    def rename_project(self) -> None:
+        project = self._current_project()
+        if project is None:
+            QMessageBox.information(self, "안내", "프로젝트를 먼저 선택하세요.")
+            return
+        name, ok = QInputDialog.getText(
+            self, "이름 변경", "프로젝트 이름:", text=project.name
+        )
+        if not ok or not name.strip():
+            return
+        description, ok = QInputDialog.getMultiLineText(
+            self, "이름 변경", "설명:", text=project.description
+        )
+        if not ok:
+            return
+        try:
+            project_service.rename_project(project.id, name, description)
+        except ProjectError as exc:
+            QMessageBox.warning(self, "오류", str(exc))
+            return
+        self.refresh_projects()
+
+    def delete_project(self) -> None:
+        project = self._current_project()
+        if project is None:
+            QMessageBox.information(self, "안내", "프로젝트를 먼저 선택하세요.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "프로젝트 삭제",
+            (
+                f"‘{project.name}’ 프로젝트와 포함된 파일을 모두 삭제할까요?\n"
+                "이 작업은 되돌릴 수 없습니다."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            project_service.delete_project(project.id)
+        except ProjectError as exc:
+            QMessageBox.warning(self, "오류", str(exc))
+            return
+        self._selected_project_id = None
+        self.refresh_projects()
+
+    def add_files_dialog(self) -> None:
+        if not self._selected_project_id:
+            return
+        paths, _ = QFileDialog.getOpenFileNames(self, "프로젝트에 파일 추가")
+        if paths:
+            self.import_paths([Path(p) for p in paths])
+
+    def import_paths(self, paths: list[Path]) -> None:
+        if not self._selected_project_id:
+            return
+        try:
+            file_service.add_files(self._selected_project_id, paths)
+        except (FileError, ProjectError, OSError) as exc:
+            QMessageBox.warning(self, "파일 추가 실패", str(exc))
+            return
+        self._load_project_detail(self._selected_project_id)
+
+    def delete_selected_file(self) -> None:
+        if not self._selected_project_id:
+            return
+        item = self.file_list.currentItem()
+        if item is None:
+            return
+        file_id = item.data(Qt.ItemDataRole.UserRole)
+        name = item.text()
+        answer = QMessageBox.question(
+            self,
+            "파일 삭제",
+            f"‘{name}’ 파일을 삭제할까요?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            file_service.delete_file(self._selected_project_id, file_id)
+        except (FileError, ProjectError) as exc:
+            QMessageBox.warning(self, "오류", str(exc))
+            return
+        self._load_project_detail(self._selected_project_id)
+
+    def _on_project_selected(
+        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
+    ) -> None:
+        if current is None:
+            self._clear_detail()
+            return
+        project_id = current.data(Qt.ItemDataRole.UserRole)
+        self._selected_project_id = project_id
+        self._load_project_detail(project_id)
+
+    def _load_project_detail(self, project_id: str) -> None:
+        try:
+            project = project_service.get_project(project_id)
+            files = file_service.list_files(project_id)
+        except ProjectError:
+            self._clear_detail()
+            return
+        self.detail_title.setText(project.name)
+        self.detail_desc.setText(project.description or "(설명 없음)")
+        self.add_files_btn.setEnabled(True)
+        self.delete_file_btn.setEnabled(True)
+        self.file_list.setEnabled(True)
+        self.file_list.clear()
+        for file in files:
+            self.file_list.addItem(self._file_item(file))
+
+    def _file_item(self, file: ProjectFile) -> QListWidgetItem:
+        size_kb = max(file.size / 1024, 0.1)
+        text = f"{file.original_name}  ·  {size_kb:.1f} KB  ·  {file.status}"
+        item = QListWidgetItem(text)
+        item.setData(Qt.ItemDataRole.UserRole, file.id)
+        item.setToolTip(file.stored_name)
+        return item
+
+    def _clear_detail(self) -> None:
+        self._selected_project_id = None
+        self.detail_title.setText("프로젝트를 선택하세요")
+        self.detail_desc.setText("")
+        self.file_list.clear()
+        self.file_list.setEnabled(False)
+        self.add_files_btn.setEnabled(False)
+        self.delete_file_btn.setEnabled(False)
+
+    def _current_project(self) -> Project | None:
+        if not self._selected_project_id:
+            return None
+        try:
+            return project_service.get_project(self._selected_project_id)
+        except ProjectError:
+            return None

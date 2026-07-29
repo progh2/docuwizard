@@ -1,0 +1,98 @@
+"""Import and manage project source files (issue #6, #7)."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import uuid
+from pathlib import Path
+
+from docuwizard.models import FileStatus, ProjectFile
+from docuwizard.services import projects as project_service
+
+
+class FileError(Exception):
+    """Raised when a file operation fails."""
+
+
+def list_files(project_id: str) -> list[ProjectFile]:
+    project_service.get_project(project_id)
+    path = project_service.project_manifest_path(project_id)
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8") as f:
+        raw = json.load(f)
+    return [ProjectFile.from_dict(item) for item in raw]
+
+
+def add_files(project_id: str, sources: list[Path]) -> list[ProjectFile]:
+    """Copy source files into the project files/ directory and update the manifest."""
+    project_service.get_project(project_id)
+    files_dir = project_service.project_files_dir(project_id)
+    files_dir.mkdir(parents=True, exist_ok=True)
+
+    current = list_files(project_id)
+    added: list[ProjectFile] = []
+
+    for source in sources:
+        src = Path(source)
+        if not src.is_file():
+            raise FileError(f"파일이 아닙니다: {src}")
+
+        file_id = uuid.uuid4().hex
+        stored_name = _unique_stored_name(files_dir, src.name)
+        dest = files_dir / stored_name
+        shutil.copy2(src, dest)
+
+        record = ProjectFile(
+            id=file_id,
+            project_id=project_id,
+            original_name=src.name,
+            stored_name=stored_name,
+            size=dest.stat().st_size,
+            status=FileStatus.PENDING,
+        )
+        current.append(record)
+        added.append(record)
+
+    _write_manifest(project_id, current)
+    project_service.touch_project(project_id)
+    return added
+
+
+def delete_file(project_id: str, file_id: str) -> None:
+    project_service.get_project(project_id)
+    current = list_files(project_id)
+    target = next((f for f in current if f.id == file_id), None)
+    if target is None:
+        raise FileError("파일을 찾을 수 없습니다.")
+
+    path = project_service.project_files_dir(project_id) / target.stored_name
+    if path.exists():
+        path.unlink()
+
+    remaining = [f for f in current if f.id != file_id]
+    _write_manifest(project_id, remaining)
+    project_service.touch_project(project_id)
+
+
+def absolute_path(project_id: str, file: ProjectFile) -> Path:
+    return project_service.project_files_dir(project_id) / file.stored_name
+
+
+def _unique_stored_name(files_dir: Path, original_name: str) -> str:
+    candidate = original_name
+    stem = Path(original_name).stem
+    suffix = Path(original_name).suffix
+    counter = 1
+    while (files_dir / candidate).exists():
+        candidate = f"{stem}-{counter}{suffix}"
+        counter += 1
+    return candidate
+
+
+def _write_manifest(project_id: str, files: list[ProjectFile]) -> None:
+    path = project_service.project_manifest_path(project_id)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump([item.to_dict() for item in files], f, ensure_ascii=False, indent=2)
+        f.write("\n")
