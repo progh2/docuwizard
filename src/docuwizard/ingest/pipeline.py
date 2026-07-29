@@ -7,7 +7,9 @@ from pathlib import Path
 from docuwizard.config import load_settings
 from docuwizard.ingest import chunking, parsers, store
 from docuwizard.ingest.parsers import ParseError
+from docuwizard.llm.ollama import OllamaClient, OllamaConfig, OllamaError
 from docuwizard.models import FileStatus, ProjectFile
+from docuwizard.rag import vectors
 from docuwizard.services import files as file_service
 from docuwizard.services import projects as project_service
 
@@ -22,6 +24,7 @@ def index_file(
     *,
     db: Path | None = None,
     cancel_check=None,
+    embedder: OllamaClient | None = None,
 ) -> int:
     """Index one file. Returns chunk count. Updates file status in manifest."""
     if cancel_check and cancel_check():
@@ -58,6 +61,21 @@ def index_file(
             chunks=chunks,
             db=db,
         )
+        if chunks:
+            client = embedder or OllamaClient(OllamaConfig.from_settings(settings))
+            try:
+                embeddings = client.embed([c.text for c in chunks])
+            except OllamaError as exc:
+                raise IndexingError(f"임베딩 실패: {exc}") from exc
+            if len(embeddings) != len(chunks):
+                raise IndexingError("임베딩 개수가 청크 개수와 일치하지 않습니다.")
+            vectors.upsert_embeddings(
+                [
+                    (chunk.id, client.config.embed_model, vector)
+                    for chunk, vector in zip(chunks, embeddings, strict=True)
+                ],
+                db=db,
+            )
         ready = _with_status(file, FileStatus.READY, error=None)
         file_service.update_file_status(project_id, file.id, FileStatus.READY, error=None)
         store.upsert_file(ready, db=db)
@@ -82,6 +100,7 @@ def index_project_files(
     db: Path | None = None,
     cancel_check=None,
     on_progress=None,
+    embedder: OllamaClient | None = None,
 ) -> tuple[int, int]:
     """Index files in a project. Returns (success_count, fail_count)."""
     files = file_service.list_files(project_id)
@@ -96,7 +115,13 @@ def index_project_files(
         if on_progress:
             on_progress(idx, total, file.original_name, "indexing")
         try:
-            index_file(project_id, file, db=db, cancel_check=cancel_check)
+            index_file(
+                project_id,
+                file,
+                db=db,
+                cancel_check=cancel_check,
+                embedder=embedder,
+            )
             ok += 1
             if on_progress:
                 on_progress(idx, total, file.original_name, "ready")

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from docuwizard.paths import db_path, ensure_app_dirs
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS: dict[int, str] = {
     1: """
@@ -107,6 +107,15 @@ MIGRATIONS: dict[int, str] = {
         chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
         PRIMARY KEY (item_id, chunk_id)
     );
+    """,
+    2: """
+    CREATE TABLE IF NOT EXISTS embeddings (
+        chunk_id TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+        model TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        vector BLOB NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model);
     """,
 }
 

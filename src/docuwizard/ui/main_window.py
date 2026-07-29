@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSplitter,
+    QTabWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -30,7 +31,9 @@ from docuwizard.services import files as file_service
 from docuwizard.services import projects as project_service
 from docuwizard.services.files import FileError
 from docuwizard.services.projects import ProjectError
+from docuwizard.ui.chat_panel import ChatPanel
 from docuwizard.ui.indexing_worker import IndexingWorker
+from docuwizard.ui.settings_dialog import SettingsDialog
 
 
 class DropFileList(QListWidget):
@@ -97,6 +100,10 @@ class MainWindow(QMainWindow):
         delete_action.triggered.connect(self.delete_project)
         toolbar.addAction(delete_action)
 
+        settings_action = QAction("설정", self)
+        settings_action.triggered.connect(self.open_settings)
+        toolbar.addAction(settings_action)
+
     def _build_body(self) -> None:
         splitter = QSplitter()
 
@@ -161,11 +168,22 @@ class MainWindow(QMainWindow):
         hint.setStyleSheet("color: #666;")
         right_layout.addWidget(hint)
 
+        files_page = right
+        self.chat_panel = ChatPanel()
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(files_page, "파일")
+        self.tabs.addTab(self.chat_panel, "대화")
+
         splitter.addWidget(left)
-        splitter.addWidget(right)
+        splitter.addWidget(self.tabs)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
         self.setCentralWidget(splitter)
+
+    def open_settings(self) -> None:
+        dialog = SettingsDialog(self)
+        dialog.exec()
 
     def refresh_projects(self) -> None:
         query = self.search_edit.text().strip() or None
@@ -367,6 +385,7 @@ class MainWindow(QMainWindow):
             return
         self.detail_title.setText(project.name)
         self.detail_desc.setText(project.description or "(설명 없음)")
+        self.chat_panel.set_project(project_id)
         running = bool(self._worker and self._worker.isRunning())
         self.add_files_btn.setEnabled(not running)
         self.delete_file_btn.setEnabled(not running)
@@ -391,6 +410,7 @@ class MainWindow(QMainWindow):
 
     def _clear_detail(self) -> None:
         self._selected_project_id = None
+        self.chat_panel.set_project(None)
         self.detail_title.setText("프로젝트를 선택하세요")
         self.detail_desc.setText("")
         self.file_list.clear()

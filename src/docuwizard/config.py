@@ -19,6 +19,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "chunk_size": 800,
         "chunk_overlap": 120,
     },
+    "rag": {
+        "top_k": 5,
+    },
     "ui": {
         "language": "ko",
     },

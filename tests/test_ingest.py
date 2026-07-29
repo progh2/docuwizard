@@ -72,12 +72,14 @@ def test_chunk_segments_respects_size() -> None:
 
 
 def test_index_text_file_writes_chunks(tmp_path: Path) -> None:
+    from fakes import FakeOllama
+
     project = project_service.create_project("인덱싱")
     src = tmp_path / "guide.md"
     src.write_text("# 안내\n마감일은 다음 주 금요일입니다.\n", encoding="utf-8")
     added = file_service.add_files(project.id, [src])[0]
 
-    count = index_file(project.id, added)
+    count = index_file(project.id, added, embedder=FakeOllama())
     assert count >= 1
     refreshed = file_service.list_files(project.id)[0]
     assert refreshed.status == FileStatus.READY
@@ -87,13 +89,15 @@ def test_index_text_file_writes_chunks(tmp_path: Path) -> None:
 
 
 def test_index_failed_retry_and_delete_clears_chunks(tmp_path: Path) -> None:
+    from fakes import FakeOllama
+
     project = project_service.create_project("재시도")
     good = tmp_path / "ok.txt"
     good.write_text("유효한 내용", encoding="utf-8")
     unsupported = tmp_path / "image.webp"
     unsupported.write_bytes(b"webp")
     files = file_service.add_files(project.id, [good, unsupported])
-    ok, failed = index_project_files(project.id)
+    ok, failed = index_project_files(project.id, embedder=FakeOllama())
     assert ok == 1
     assert failed == 1
 
@@ -115,4 +119,4 @@ def test_schema_tables_exist() -> None:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-    assert {"projects", "files", "chunks", "conversations", "messages"} <= tables
+    assert {"projects", "files", "chunks", "conversations", "messages", "embeddings"} <= tables
