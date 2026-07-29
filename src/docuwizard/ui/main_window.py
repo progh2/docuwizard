@@ -32,6 +32,7 @@ from docuwizard.services import projects as project_service
 from docuwizard.services.files import FileError
 from docuwizard.services.projects import ProjectError
 from docuwizard.ui.chat_panel import ChatPanel
+from docuwizard.ui.favorites_panel import FavoritesPanel
 from docuwizard.ui.indexing_worker import IndexingWorker
 from docuwizard.ui.settings_dialog import SettingsDialog
 
@@ -170,10 +171,14 @@ class MainWindow(QMainWindow):
 
         files_page = right
         self.chat_panel = ChatPanel()
+        self.favorites_panel = FavoritesPanel()
+        self.favorites_panel.open_conversation.connect(self._open_favorite_conversation)
+        self.chat_panel.set_favorites_callback(self.favorites_panel.refresh)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(files_page, "파일")
         self.tabs.addTab(self.chat_panel, "대화")
+        self.tabs.addTab(self.favorites_panel, "즐겨찾기")
 
         splitter.addWidget(left)
         splitter.addWidget(self.tabs)
@@ -386,6 +391,7 @@ class MainWindow(QMainWindow):
         self.detail_title.setText(project.name)
         self.detail_desc.setText(project.description or "(설명 없음)")
         self.chat_panel.set_project(project_id)
+        self.favorites_panel.set_project(project_id)
         running = bool(self._worker and self._worker.isRunning())
         self.add_files_btn.setEnabled(not running)
         self.delete_file_btn.setEnabled(not running)
@@ -411,6 +417,7 @@ class MainWindow(QMainWindow):
     def _clear_detail(self) -> None:
         self._selected_project_id = None
         self.chat_panel.set_project(None)
+        self.favorites_panel.set_project(None)
         self.detail_title.setText("프로젝트를 선택하세요")
         self.detail_desc.setText("")
         self.file_list.clear()
@@ -420,6 +427,10 @@ class MainWindow(QMainWindow):
         self.index_btn.setEnabled(False)
         self.retry_btn.setEnabled(False)
         self.cancel_index_btn.setEnabled(False)
+
+    def _open_favorite_conversation(self, conversation_id: str) -> None:
+        self.tabs.setCurrentWidget(self.chat_panel)
+        self.chat_panel.open_conversation(conversation_id)
 
     def _current_project(self) -> Project | None:
         if not self._selected_project_id:

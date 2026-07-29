@@ -1,4 +1,4 @@
-"""Chat panel with conversation list and streaming answers (issues #18–#19)."""
+"""Chat panel with search, stars, and citation preview (issues #18–#24)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -18,9 +19,9 @@ from PySide6.QtWidgets import (
 )
 
 from docuwizard.rag.orchestrator import RagAnswer
-from docuwizard.rag.prompt import format_location
 from docuwizard.services import conversations as conversation_service
 from docuwizard.ui.chat_worker import ChatWorker
+from docuwizard.ui.citation_panel import CitationPanel
 
 
 class ChatPanel(QWidget):
@@ -30,6 +31,8 @@ class ChatPanel(QWidget):
         self._conversation_id: str | None = None
         self._worker: ChatWorker | None = None
         self._streaming_buffer = ""
+        self._messages: list = []
+        self._favorites_callback = None
 
         root = QHBoxLayout(self)
         splitter = QSplitter()
@@ -37,15 +40,23 @@ class ChatPanel(QWidget):
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(QLabel("대화"))
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("대화·내용 검색…")
+        self.search_edit.textChanged.connect(self.refresh_conversations)
+        left_layout.addWidget(self.search_edit)
+
         btn_row = QHBoxLayout()
         self.new_btn = QPushButton("새 대화")
         self.new_btn.clicked.connect(self.create_conversation)
         self.rename_btn = QPushButton("이름 변경")
         self.rename_btn.clicked.connect(self.rename_conversation)
+        self.star_btn = QPushButton("★ 대화")
+        self.star_btn.clicked.connect(self.toggle_conversation_star)
         self.delete_btn = QPushButton("삭제")
         self.delete_btn.clicked.connect(self.delete_conversation)
         btn_row.addWidget(self.new_btn)
         btn_row.addWidget(self.rename_btn)
+        btn_row.addWidget(self.star_btn)
         btn_row.addWidget(self.delete_btn)
         left_layout.addLayout(btn_row)
         self.conversation_list = QListWidget()
@@ -54,12 +65,17 @@ class ChatPanel(QWidget):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
+        msg_btn_row = QHBoxLayout()
+        self.star_message_btn = QPushButton("★ 마지막 답변")
+        self.star_message_btn.clicked.connect(self.toggle_last_answer_star)
+        msg_btn_row.addWidget(self.star_message_btn)
+        msg_btn_row.addStretch(1)
+        right_layout.addLayout(msg_btn_row)
+
         self.transcript = QPlainTextEdit()
         self.transcript.setReadOnly(True)
-        self.citations = QPlainTextEdit()
-        self.citations.setReadOnly(True)
-        self.citations.setPlaceholderText("출처가 여기에 표시됩니다.")
-        self.citations.setMaximumHeight(120)
+        self.citation_panel = CitationPanel()
+        self.citation_panel.setMaximumHeight(180)
         self.input = QPlainTextEdit()
         self.input.setPlaceholderText("질문을 입력하세요…")
         self.input.setMaximumHeight(90)
@@ -69,8 +85,7 @@ class ChatPanel(QWidget):
         send_row.addStretch(1)
         send_row.addWidget(self.send_btn)
         right_layout.addWidget(self.transcript, stretch=3)
-        right_layout.addWidget(QLabel("출처"))
-        right_layout.addWidget(self.citations)
+        right_layout.addWidget(self.citation_panel)
         right_layout.addWidget(self.input)
         right_layout.addLayout(send_row)
 
@@ -81,29 +96,53 @@ class ChatPanel(QWidget):
         root.addWidget(splitter)
         self.set_project(None)
 
+    def set_favorites_callback(self, callback) -> None:
+        self._favorites_callback = callback
+
     def set_project(self, project_id: str | None) -> None:
         self._project_id = project_id
         self._conversation_id = None
         enabled = project_id is not None
-        self.new_btn.setEnabled(enabled)
-        self.rename_btn.setEnabled(enabled)
-        self.delete_btn.setEnabled(enabled)
-        self.send_btn.setEnabled(enabled)
-        self.input.setEnabled(enabled)
+        for widget in (
+            self.new_btn,
+            self.rename_btn,
+            self.star_btn,
+            self.delete_btn,
+            self.send_btn,
+            self.input,
+            self.search_edit,
+            self.star_message_btn,
+        ):
+            widget.setEnabled(enabled)
         self.conversation_list.clear()
         self.transcript.clear()
-        self.citations.clear()
+        self.citation_panel.clear()
+        self._messages = []
         if project_id:
             self.refresh_conversations()
+
+    def open_conversation(self, conversation_id: str) -> None:
+        self._conversation_id = conversation_id
+        self.search_edit.clear()
+        self.refresh_conversations()
+        for i in range(self.conversation_list.count()):
+            item = self.conversation_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == conversation_id:
+                self.conversation_list.setCurrentItem(item)
+                break
 
     def refresh_conversations(self) -> None:
         if not self._project_id:
             return
         current = self._conversation_id
+        query = self.search_edit.text().strip() or None
         self.conversation_list.blockSignals(True)
         self.conversation_list.clear()
-        for conversation in conversation_service.list_conversations(self._project_id):
-            item = QListWidgetItem(conversation.title)
+        for conversation in conversation_service.list_conversations(
+            self._project_id, query=query
+        ):
+            prefix = "★ " if conversation.is_starred else ""
+            item = QListWidgetItem(f"{prefix}{conversation.title}")
             item.setData(Qt.ItemDataRole.UserRole, conversation.id)
             self.conversation_list.addItem(item)
             if conversation.id == current:
@@ -114,6 +153,7 @@ class ChatPanel(QWidget):
         elif self.conversation_list.currentItem() is None:
             self._conversation_id = None
             self.transcript.clear()
+            self.citation_panel.clear()
 
     def create_conversation(self) -> None:
         if not self._project_id:
@@ -121,6 +161,7 @@ class ChatPanel(QWidget):
         conversation = conversation_service.create_conversation(self._project_id)
         self._conversation_id = conversation.id
         self.refresh_conversations()
+        self._notify_favorites()
 
     def rename_conversation(self) -> None:
         if not self._conversation_id:
@@ -133,6 +174,23 @@ class ChatPanel(QWidget):
             return
         conversation_service.rename_conversation(self._conversation_id, title)
         self.refresh_conversations()
+        self._notify_favorites()
+
+    def toggle_conversation_star(self) -> None:
+        if not self._conversation_id:
+            return
+        conversation_service.toggle_conversation_star(self._conversation_id)
+        self.refresh_conversations()
+        self._notify_favorites()
+
+    def toggle_last_answer_star(self) -> None:
+        answers = [m for m in self._messages if m.role == "assistant"]
+        if not answers:
+            QMessageBox.information(self, "안내", "별표를 달 답변이 없습니다.")
+            return
+        conversation_service.toggle_message_star(answers[-1].id)
+        self._load_messages()
+        self._notify_favorites()
 
     def delete_conversation(self) -> None:
         if not self._conversation_id:
@@ -149,6 +207,7 @@ class ChatPanel(QWidget):
         conversation_service.delete_conversation(self._conversation_id)
         self._conversation_id = None
         self.refresh_conversations()
+        self._notify_favorites()
 
     def send_question(self) -> None:
         if not self._project_id:
@@ -171,7 +230,7 @@ class ChatPanel(QWidget):
         )
         self.input.clear()
         self._append_transcript("사용자", question)
-        self.citations.clear()
+        self.citation_panel.clear()
         self._streaming_buffer = ""
         self._append_transcript("도우미", "")
         self.send_btn.setEnabled(False)
@@ -181,24 +240,43 @@ class ChatPanel(QWidget):
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
 
+    def _notify_favorites(self) -> None:
+        if self._favorites_callback:
+            self._favorites_callback()
+
     def _on_conversation_selected(
         self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
     ) -> None:
         if current is None:
             self._conversation_id = None
             self.transcript.clear()
+            self.citation_panel.clear()
             return
         self._conversation_id = current.data(Qt.ItemDataRole.UserRole)
         self._load_messages()
 
     def _load_messages(self) -> None:
         self.transcript.clear()
-        self.citations.clear()
+        self.citation_panel.clear()
+        self._messages = []
         if not self._conversation_id:
             return
-        for message in conversation_service.list_messages(self._conversation_id):
-            label = "사용자" if message.role == "user" else "도우미"
+        self._messages = conversation_service.list_messages(self._conversation_id)
+        for message in self._messages:
+            if message.role == "user":
+                label = "사용자"
+            elif message.is_starred:
+                label = "도우미 ★"
+            else:
+                label = "도우미"
             self._append_transcript(label, message.content)
+        last_answer = next(
+            (m for m in reversed(self._messages) if m.role == "assistant"),
+            None,
+        )
+        if last_answer and last_answer.citation_ids:
+            chunks = conversation_service.get_chunks_by_ids(last_answer.citation_ids)
+            self.citation_panel.set_chunks(chunks)
 
     def _append_transcript(self, role: str, content: str) -> None:
         existing = self.transcript.toPlainText()
@@ -234,13 +312,7 @@ class ChatPanel(QWidget):
             citations=answer.citations,
         )
         self._load_messages()
-        lines = []
-        for i, chunk in enumerate(answer.citations, start=1):
-            lines.append(f"[doc:{i}] {format_location(chunk)} (score={chunk.score:.3f})")
-            snippet = chunk.text[:240] + ("…" if len(chunk.text) > 240 else "")
-            lines.append(snippet)
-            lines.append("")
-        self.citations.setPlainText("\n".join(lines).strip() or "(관련 출처 없음)")
+        self.citation_panel.set_chunks(answer.citations)
         conversation = conversation_service.get_conversation(self._conversation_id)
         if conversation.title == "새 대화":
             preview = answer.text[:40] or "대화"
