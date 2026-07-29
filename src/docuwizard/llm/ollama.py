@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -19,15 +20,21 @@ class OllamaConfig:
     base_url: str = "http://127.0.0.1:11434"
     chat_model: str = "gemma2"
     embed_model: str = "nomic-embed-text"
-    timeout_sec: float = 120.0
+    timeout_sec: float = 600.0
 
     @classmethod
     def from_settings(cls, settings: dict[str, Any]) -> OllamaConfig:
         llm = settings.get("llm", {})
+        timeout = llm.get("ollama_timeout_sec", cls.timeout_sec)
+        try:
+            timeout_sec = float(timeout)
+        except (TypeError, ValueError):
+            timeout_sec = cls.timeout_sec
         return cls(
             base_url=str(llm.get("ollama_base_url", cls.base_url)).rstrip("/"),
             chat_model=str(llm.get("ollama_chat_model", cls.chat_model)),
             embed_model=str(llm.get("ollama_embed_model", cls.embed_model)),
+            timeout_sec=max(timeout_sec, 30.0),
         )
 
 
@@ -35,11 +42,22 @@ class OllamaClient:
     def __init__(self, config: OllamaConfig | None = None) -> None:
         self.config = config or OllamaConfig()
 
-    def ping(self) -> str:
-        """Return OK message if the server responds."""
+    def list_models(self) -> list[str]:
+        """Return installed model names from Ollama."""
         data = self._request_json("GET", "/api/tags")
         models = data.get("models") or []
-        names = [m.get("name", "") for m in models if isinstance(m, dict)]
+        names = sorted(
+            {
+                str(m.get("name", "")).strip()
+                for m in models
+                if isinstance(m, dict) and m.get("name")
+            }
+        )
+        return [n for n in names if n]
+
+    def ping(self) -> str:
+        """Return OK message if the server responds."""
+        names = self.list_models()
         return f"연결됨 ({len(names)}개 모델)"
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -81,26 +99,40 @@ class OllamaClient:
         return content
 
     def chat_stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
+        """Yield tokens while reading the Ollama NDJSON stream."""
         payload = {
             "model": self.config.chat_model,
             "messages": messages,
             "stream": True,
         }
-        raw = self._request_raw("POST", "/api/chat", payload)
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            message = data.get("message") or {}
-            content = message.get("content")
-            if isinstance(content, str) and content:
-                yield content
-            if data.get("done"):
-                break
+        request = self._build_request("POST", "/api/chat", payload)
+        try:
+            with urllib.request.urlopen(request, timeout=self.config.timeout_sec) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    message = data.get("message") or {}
+                    content = message.get("content")
+                    if isinstance(content, str) and content:
+                        yield content
+                    if data.get("done"):
+                        break
+        except TimeoutError as exc:
+            raise OllamaError(
+                f"Ollama 응답 시간 초과 ({self.config.timeout_sec:.0f}초). "
+                f"채팅 모델 '{self.config.chat_model}' 로딩/생성이 오래 걸렸습니다. "
+                "설정에서 타임아웃을 늘리거나 더 작은 모델을 선택하세요."
+            ) from exc
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise OllamaError(f"Ollama HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise self._wrap_url_error(exc) from exc
 
     def _request_json(self, method: str, path: str, payload: dict | None = None) -> dict:
         body = self._request_raw(method, path, payload)
@@ -113,19 +145,38 @@ class OllamaClient:
         return data
 
     def _request_raw(self, method: str, path: str, payload: dict | None = None) -> str:
+        request = self._build_request(method, path, payload)
+        try:
+            with urllib.request.urlopen(request, timeout=self.config.timeout_sec) as resp:
+                return resp.read().decode("utf-8")
+        except TimeoutError as exc:
+            raise OllamaError(
+                f"Ollama 응답 시간 초과 ({self.config.timeout_sec:.0f}초)."
+            ) from exc
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise OllamaError(f"Ollama HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise self._wrap_url_error(exc) from exc
+
+    def _build_request(
+        self, method: str, path: str, payload: dict | None = None
+    ) -> urllib.request.Request:
         url = f"{self.config.base_url}{path}"
         data = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
+        return urllib.request.Request(
             url,
             data=data,
             method=method,
             headers={"Content-Type": "application/json"} if payload is not None else {},
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout_sec) as resp:
-                return resp.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise OllamaError(f"Ollama HTTP {exc.code}: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise OllamaError(f"Ollama에 연결할 수 없습니다: {exc.reason}") from exc
+
+    def _wrap_url_error(self, exc: urllib.error.URLError) -> OllamaError:
+        reason = exc.reason
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return OllamaError(
+                f"Ollama 응답 시간 초과 ({self.config.timeout_sec:.0f}초). "
+                f"채팅 모델 '{self.config.chat_model}' / "
+                f"임베딩 모델 '{self.config.embed_model}' 을 확인하세요."
+            )
+        return OllamaError(f"Ollama에 연결할 수 없습니다: {reason}")

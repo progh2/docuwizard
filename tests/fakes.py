@@ -9,6 +9,9 @@ class FakeOllama(OllamaClient):
     def __init__(self) -> None:
         super().__init__(OllamaConfig(embed_model="fake-embed", chat_model="fake-chat"))
 
+    def list_models(self) -> list[str]:
+        return ["fake-chat", "fake-embed", "nomic-embed-text"]
+
     def ping(self) -> str:
         return "연결됨 (테스트)"
 

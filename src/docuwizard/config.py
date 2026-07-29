@@ -14,6 +14,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "ollama_base_url": "http://127.0.0.1:11434",
         "ollama_chat_model": "gemma2",
         "ollama_embed_model": "nomic-embed-text",
+        "ollama_timeout_sec": 600,
     },
     "chunking": {
         "chunk_size": 800,
