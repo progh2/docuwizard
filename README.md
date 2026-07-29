@@ -26,12 +26,14 @@
 
 ## 상태
 
-🚧 **초기 설계 단계** — PRD 기준으로 MVP를 구현합니다.
+🚧 **M0 Foundation 진행 중** — 패키지 스캐폴드·데이터 경로·CI 뼈대 추가.
 
 - 제품 요구사항: [docs/PRD.md](docs/PRD.md)
 - GitHub 마일스톤·이슈 백로그: [docs/GITHUB_BACKLOG.md](docs/GITHUB_BACKLOG.md)
+- 데이터 경로: [docs/DATA_PATHS.md](docs/DATA_PATHS.md)
+- Project 보드: https://github.com/users/progh2/projects/19
 
-## 빠른 시작 (구현 후)
+## 빠른 시작
 
 ```bash
 python -m venv .venv
@@ -41,9 +43,14 @@ pip install -e ".[dev]"
 python -m docuwizard
 ```
 
-Ollama 설치 후 예: `ollama pull gemma2` (모델명은 설정에서 변경)
+개발 검사:
 
-> 위 명령은 구현 완료 후 확정됩니다. 현재 저장소는 문서·백로그부터 구성 중입니다.
+```bash
+ruff check src tests
+pytest -q
+```
+
+Ollama 설치 후 예: `ollama pull gemma2` (모델명은 설정에서 변경)
 
 ## 보안 안내
 

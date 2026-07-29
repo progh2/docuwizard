@@ -6,3 +6,4 @@
 - [README](../README.md)
 - [PRD](./PRD.md)
 - [GitHub Backlog](./GITHUB_BACKLOG.md)
+- [Data paths](./DATA_PATHS.md)
