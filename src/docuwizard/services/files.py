@@ -7,6 +7,7 @@ import shutil
 import uuid
 from pathlib import Path
 
+from docuwizard.ingest import store
 from docuwizard.models import FileStatus, ProjectFile
 from docuwizard.services import projects as project_service
 
@@ -27,7 +28,8 @@ def list_files(project_id: str) -> list[ProjectFile]:
 
 def add_files(project_id: str, sources: list[Path]) -> list[ProjectFile]:
     """Copy source files into the project files/ directory and update the manifest."""
-    project_service.get_project(project_id)
+    project = project_service.get_project(project_id)
+    store.upsert_project(project)
     files_dir = project_service.project_files_dir(project_id)
     files_dir.mkdir(parents=True, exist_ok=True)
 
@@ -54,10 +56,41 @@ def add_files(project_id: str, sources: list[Path]) -> list[ProjectFile]:
         )
         current.append(record)
         added.append(record)
+        store.upsert_file(record)
 
     _write_manifest(project_id, current)
     project_service.touch_project(project_id)
     return added
+
+
+def update_file_status(
+    project_id: str,
+    file_id: str,
+    status: FileStatus,
+    error: str | None = None,
+) -> ProjectFile:
+    current = list_files(project_id)
+    updated: ProjectFile | None = None
+    for idx, item in enumerate(current):
+        if item.id != file_id:
+            continue
+        updated = ProjectFile(
+            id=item.id,
+            project_id=item.project_id,
+            original_name=item.original_name,
+            stored_name=item.stored_name,
+            size=item.size,
+            status=status,
+            error=error,
+            added_at=item.added_at,
+        )
+        current[idx] = updated
+        break
+    if updated is None:
+        raise FileError("파일을 찾을 수 없습니다.")
+    _write_manifest(project_id, current)
+    store.upsert_file(updated)
+    return updated
 
 
 def delete_file(project_id: str, file_id: str) -> None:
@@ -73,6 +106,7 @@ def delete_file(project_id: str, file_id: str) -> None:
 
     remaining = [f for f in current if f.id != file_id]
     _write_manifest(project_id, remaining)
+    store.delete_file(file_id)
     project_service.touch_project(project_id)
 
 

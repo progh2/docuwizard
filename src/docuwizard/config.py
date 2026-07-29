@@ -15,6 +15,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "ollama_chat_model": "gemma2",
         "ollama_embed_model": "nomic-embed-text",
     },
+    "chunking": {
+        "chunk_size": 800,
+        "chunk_overlap": 120,
+    },
     "ui": {
         "language": "ko",
     },

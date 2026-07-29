@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QToolBar,
@@ -29,6 +30,7 @@ from docuwizard.services import files as file_service
 from docuwizard.services import projects as project_service
 from docuwizard.services.files import FileError
 from docuwizard.services.projects import ProjectError
+from docuwizard.ui.indexing_worker import IndexingWorker
 
 
 class DropFileList(QListWidget):
@@ -72,6 +74,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"DocuWizard {__version__}")
         self.resize(1100, 700)
         self._selected_project_id: str | None = None
+        self._worker: IndexingWorker | None = None
 
         self._build_toolbar()
         self._build_body()
@@ -123,17 +126,38 @@ class MainWindow(QMainWindow):
         self.add_files_btn = QPushButton("파일 추가…")
         self.add_files_btn.clicked.connect(self.add_files_dialog)
         self.add_files_btn.setEnabled(False)
+        self.index_btn = QPushButton("인덱싱")
+        self.index_btn.clicked.connect(self.start_indexing)
+        self.index_btn.setEnabled(False)
+        self.retry_btn = QPushButton("실패 재시도")
+        self.retry_btn.clicked.connect(self.retry_failed_indexing)
+        self.retry_btn.setEnabled(False)
+        self.cancel_index_btn = QPushButton("인덱싱 취소")
+        self.cancel_index_btn.clicked.connect(self.cancel_indexing)
+        self.cancel_index_btn.setEnabled(False)
         self.delete_file_btn = QPushButton("선택 파일 삭제")
         self.delete_file_btn.clicked.connect(self.delete_selected_file)
         self.delete_file_btn.setEnabled(False)
         file_header.addWidget(self.add_files_btn)
+        file_header.addWidget(self.index_btn)
+        file_header.addWidget(self.retry_btn)
+        file_header.addWidget(self.cancel_index_btn)
         file_header.addWidget(self.delete_file_btn)
         right_layout.addLayout(file_header)
 
         self.file_list = DropFileList(self.import_paths)
         self.file_list.setEnabled(False)
         right_layout.addWidget(self.file_list)
-        hint = QLabel("파일을 이 목록으로 드래그앤드롭하거나 ‘파일 추가’를 사용하세요.")
+
+        self.progress = QProgressBar()
+        self.progress.setValue(0)
+        self.progress_label = QLabel("")
+        right_layout.addWidget(self.progress)
+        right_layout.addWidget(self.progress_label)
+
+        hint = QLabel(
+            "파일을 드래그앤드롭하거나 추가한 뒤 ‘인덱싱’으로 내용을 DB에 저장하세요."
+        )
         hint.setStyleSheet("color: #666;")
         right_layout.addWidget(hint)
 
@@ -266,6 +290,64 @@ class MainWindow(QMainWindow):
             return
         self._load_project_detail(self._selected_project_id)
 
+    def start_indexing(self) -> None:
+        self._start_worker(only_failed_or_pending=True)
+
+    def retry_failed_indexing(self) -> None:
+        self._start_worker(only_failed_or_pending=True)
+
+    def cancel_indexing(self) -> None:
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+            self.progress_label.setText("취소 요청됨…")
+
+    def _start_worker(self, *, only_failed_or_pending: bool) -> None:
+        if not self._selected_project_id:
+            return
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, "안내", "이미 인덱싱이 진행 중입니다.")
+            return
+        self._worker = IndexingWorker(
+            self._selected_project_id,
+            only_failed_or_pending=only_failed_or_pending,
+            parent=self,
+        )
+        self._worker.progress.connect(self._on_index_progress)
+        self._worker.finished_ok.connect(self._on_index_finished)
+        self._worker.failed.connect(self._on_index_failed)
+        self._set_indexing_ui(True)
+        self.progress.setValue(0)
+        self.progress_label.setText("인덱싱 시작…")
+        self._worker.start()
+
+    def _on_index_progress(self, current: int, total: int, name: str, state: str) -> None:
+        self.progress.setMaximum(max(total, 1))
+        self.progress.setValue(current)
+        self.progress_label.setText(f"[{current}/{total}] {name} — {state}")
+        if self._selected_project_id:
+            self._load_project_detail(self._selected_project_id)
+
+    def _on_index_finished(self, ok: int, failed: int) -> None:
+        self._set_indexing_ui(False)
+        self.progress_label.setText(f"완료 — 성공 {ok}, 실패 {failed}")
+        if self._selected_project_id:
+            self._load_project_detail(self._selected_project_id)
+
+    def _on_index_failed(self, message: str) -> None:
+        self._set_indexing_ui(False)
+        self.progress_label.setText("인덱싱 오류")
+        QMessageBox.warning(self, "인덱싱 실패", message)
+        if self._selected_project_id:
+            self._load_project_detail(self._selected_project_id)
+
+    def _set_indexing_ui(self, running: bool) -> None:
+        enabled = bool(self._selected_project_id) and not running
+        self.index_btn.setEnabled(enabled)
+        self.retry_btn.setEnabled(enabled)
+        self.cancel_index_btn.setEnabled(running)
+        self.add_files_btn.setEnabled(enabled)
+        self.delete_file_btn.setEnabled(enabled)
+
     def _on_project_selected(
         self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
     ) -> None:
@@ -285,8 +367,12 @@ class MainWindow(QMainWindow):
             return
         self.detail_title.setText(project.name)
         self.detail_desc.setText(project.description or "(설명 없음)")
-        self.add_files_btn.setEnabled(True)
-        self.delete_file_btn.setEnabled(True)
+        running = bool(self._worker and self._worker.isRunning())
+        self.add_files_btn.setEnabled(not running)
+        self.delete_file_btn.setEnabled(not running)
+        self.index_btn.setEnabled(not running)
+        self.retry_btn.setEnabled(not running)
+        self.cancel_index_btn.setEnabled(running)
         self.file_list.setEnabled(True)
         self.file_list.clear()
         for file in files:
@@ -294,7 +380,10 @@ class MainWindow(QMainWindow):
 
     def _file_item(self, file: ProjectFile) -> QListWidgetItem:
         size_kb = max(file.size / 1024, 0.1)
-        text = f"{file.original_name}  ·  {size_kb:.1f} KB  ·  {file.status}"
+        status = str(file.status)
+        if file.error:
+            status = f"{status} ({file.error})"
+        text = f"{file.original_name}  ·  {size_kb:.1f} KB  ·  {status}"
         item = QListWidgetItem(text)
         item.setData(Qt.ItemDataRole.UserRole, file.id)
         item.setToolTip(file.stored_name)
@@ -308,6 +397,9 @@ class MainWindow(QMainWindow):
         self.file_list.setEnabled(False)
         self.add_files_btn.setEnabled(False)
         self.delete_file_btn.setEnabled(False)
+        self.index_btn.setEnabled(False)
+        self.retry_btn.setEnabled(False)
+        self.cancel_index_btn.setEnabled(False)
 
     def _current_project(self) -> Project | None:
         if not self._selected_project_id:

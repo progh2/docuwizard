@@ -12,18 +12,6 @@ from docuwizard.services.files import FileError
 from docuwizard.services.projects import ProjectError
 
 
-@pytest.fixture(autouse=True)
-def isolated_app_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    data = tmp_path / "data"
-    config = tmp_path / "config"
-    projects = data / "projects"
-    monkeypatch.setattr("docuwizard.paths.data_dir", lambda: data)
-    monkeypatch.setattr("docuwizard.paths.config_dir", lambda: config)
-    monkeypatch.setattr("docuwizard.paths.projects_dir", lambda: projects)
-    monkeypatch.setattr("docuwizard.services.projects.projects_dir", lambda: projects)
-    yield
-
-
 def test_create_list_rename_delete_project() -> None:
     project = project_service.create_project("입찰 A", "RFP 모음")
     assert project.name == "입찰 A"

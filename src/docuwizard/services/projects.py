@@ -8,6 +8,7 @@ import shutil
 import uuid
 from pathlib import Path
 
+from docuwizard.ingest import store
 from docuwizard.models import Project, utc_now_iso
 from docuwizard.paths import ensure_app_dirs, projects_dir
 
@@ -55,6 +56,7 @@ def create_project(name: str, description: str = "") -> Project:
     project = Project(id=project_id, name=cleaned, description=description.strip())
     _write_project(project)
     project_manifest_path(project_id).write_text("[]\n", encoding="utf-8")
+    store.upsert_project(project)
     return project
 
 
@@ -96,14 +98,16 @@ def rename_project(project_id: str, name: str, description: str | None = None) -
         project.description = description.strip()
     project.updated_at = utc_now_iso()
     _write_project(project)
+    store.upsert_project(project)
     return project
 
 
 def delete_project(project_id: str) -> None:
-    """Remove project metadata, files, and directory tree."""
+    """Remove project metadata, files, DB rows, and directory tree."""
     root = project_root(project_id)
     if not root.exists():
         raise ProjectError("프로젝트를 찾을 수 없습니다.")
+    store.delete_project(project_id)
     shutil.rmtree(root)
 
 
@@ -111,6 +115,7 @@ def touch_project(project_id: str) -> None:
     project = get_project(project_id)
     project.updated_at = utc_now_iso()
     _write_project(project)
+    store.upsert_project(project)
 
 
 def _read_project(path: Path) -> Project:
