@@ -10,8 +10,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from docuwizard.llm.base import LlmError
 
-class OllamaError(Exception):
+
+class OllamaError(LlmError):
     """Raised when an Ollama request fails."""
 
 
@@ -42,6 +44,14 @@ class OllamaClient:
     def __init__(self, config: OllamaConfig | None = None) -> None:
         self.config = config or OllamaConfig()
         self._active_response = None
+
+    @property
+    def provider_name(self) -> str:
+        return "ollama"
+
+    @property
+    def model_name(self) -> str:
+        return self.config.chat_model
 
     def abort(self) -> None:
         """Close the in-flight chat stream (safe to call from another thread).

@@ -10,7 +10,9 @@ from typing import Any
 
 from docuwizard.config import load_settings
 from docuwizard.db import db_session
-from docuwizard.llm.ollama import OllamaClient, OllamaConfig, OllamaError
+from docuwizard.llm.base import ChatClient, LlmError
+from docuwizard.llm.factory import create_chat_client
+from docuwizard.llm.ollama import OllamaClient, OllamaConfig
 from docuwizard.models import utc_now_iso
 from docuwizard.rag import vectors
 from docuwizard.rag.prompt import format_location
@@ -73,14 +75,20 @@ def generate_report(
     project_id: str,
     *,
     client: OllamaClient | None = None,
+    chat_client: ChatClient | None = None,
     settings: dict[str, Any] | None = None,
     db: Path | None = None,
     on_status=None,
 ) -> EssentialsReport:
-    """Retrieve per-category context, summarize with the LLM, and persist."""
+    """Retrieve per-category context, summarize with the LLM, and persist.
+
+    ``client`` embeds locally via Ollama; ``chat_client`` may be an external
+    provider for the summaries themselves.
+    """
     project_service.get_project(project_id)
     cfg = settings or load_settings()
     ollama = client or OllamaClient(OllamaConfig.from_settings(cfg))
+    chat = chat_client or create_chat_client(cfg, embedder=ollama)
     top_k = max(int(cfg.get("rag", {}).get("top_k", 5)), 3)
     embed_model = ollama.config.embed_model
 
@@ -93,8 +101,8 @@ def generate_report(
         project_id=project_id,
         version=_next_version(project_id, db=db),
         created_at=utc_now_iso(),
-        model=ollama.config.chat_model,
-        provider="ollama",
+        model=chat.model_name,
+        provider=chat.provider_name,
     )
 
     any_context = False
@@ -102,7 +110,7 @@ def generate_report(
         status(f"[{idx}/{len(CATEGORIES)}] {name} 분석 중…")
         try:
             query_vecs = ollama.embed([query])
-        except OllamaError as exc:
+        except LlmError as exc:
             raise EssentialsError(str(exc)) from exc
         chunks = vectors.search_project(
             project_id,
@@ -116,8 +124,8 @@ def generate_report(
         any_context = True
         messages = _build_messages(name, chunks)
         try:
-            text = ollama.chat(messages, stream=False)
-        except OllamaError as exc:
+            text = chat.chat(messages, stream=False)
+        except LlmError as exc:
             raise EssentialsError(str(exc)) from exc
         for summary, refs in _parse_items(text):
             citation_ids = [

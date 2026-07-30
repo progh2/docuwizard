@@ -15,6 +15,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "ollama_chat_model": "gemma2",
         "ollama_embed_model": "nomic-embed-text",
         "ollama_timeout_sec": 600,
+        "openai_model": "gpt-4o-mini",
+        "openai_base_url": "https://api.openai.com/v1",
+        "anthropic_model": "claude-sonnet-4-5",
+        "anthropic_base_url": "https://api.anthropic.com/v1",
     },
     "chunking": {
         "chunk_size": 800,

@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from docuwizard.config import load_settings
-from docuwizard.llm.ollama import OllamaClient, OllamaConfig, OllamaError
+from docuwizard.llm.base import ChatClient, LlmError
+from docuwizard.llm.factory import create_chat_client
+from docuwizard.llm.ollama import OllamaClient, OllamaConfig
 from docuwizard.rag import prompt, vectors
 from docuwizard.rag.vectors import RetrievedChunk
 
@@ -37,6 +39,7 @@ def answer_question(
     question: str,
     *,
     client: OllamaClient | None = None,
+    chat_client: ChatClient | None = None,
     settings: dict[str, Any] | None = None,
     db: Path | None = None,
     stream: bool = False,
@@ -45,8 +48,14 @@ def answer_question(
     on_status=None,
     cancel_check=None,
 ) -> RagAnswer:
+    """Answer a question over the project's documents.
+
+    ``client`` is the local Ollama client used for embeddings; ``chat_client``
+    generates the answer and may be an external provider (OpenAI/Anthropic).
+    """
     cfg = settings or load_settings()
     ollama = client or OllamaClient(OllamaConfig.from_settings(cfg))
+    chat = chat_client or create_chat_client(cfg, embedder=ollama)
     top_k = int(cfg.get("rag", {}).get("top_k", 5))
     embed_model = ollama.config.embed_model
 
@@ -62,7 +71,7 @@ def answer_question(
     status(f"질문 임베딩 중… ({embed_model})")
     try:
         query_vecs = ollama.embed([question])
-    except OllamaError as exc:
+    except LlmError as exc:
         raise RagError(str(exc)) from exc
     if not query_vecs:
         raise RagError("질문 임베딩을 만들지 못했습니다.")
@@ -80,26 +89,26 @@ def answer_question(
     messages = prompt.build_messages(question, citations, history=history)
     check_cancel()
     status(
-        f"모델 응답 대기 중… ({ollama.config.chat_model}) "
-        f"— 큰 모델은 첫 글자까지 수 분이 걸릴 수 있습니다"
+        f"모델 응답 대기 중… ({chat.provider_name}:{chat.model_name}) "
+        f"— 큰 로컬 모델은 첫 글자까지 수 분이 걸릴 수 있습니다"
     )
     parts: list[str] = []
     try:
         if stream and on_token is not None:
             first = True
-            for token in ollama.chat_stream(messages):
+            for token in chat.chat_stream(messages):
                 check_cancel("".join(parts))
                 if first:
-                    status(f"응답 생성 중… ({ollama.config.chat_model})")
+                    status(f"응답 생성 중… ({chat.model_name})")
                     first = False
                 parts.append(token)
                 on_token(token)
             text = "".join(parts)
         else:
-            text = ollama.chat(messages, stream=False)
+            text = chat.chat(messages, stream=False)
     except RagCancelled:
         raise
-    except OllamaError as exc:
+    except LlmError as exc:
         if cancel_check and cancel_check():
             # The stream was aborted by the user; report as cancellation.
             raise RagCancelled("".join(parts)) from exc
@@ -108,6 +117,6 @@ def answer_question(
     return RagAnswer(
         text=text.strip(),
         citations=citations,
-        model=ollama.config.chat_model,
-        provider="ollama",
+        model=chat.model_name,
+        provider=chat.provider_name,
     )
