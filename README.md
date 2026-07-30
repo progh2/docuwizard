@@ -105,10 +105,21 @@ flowchart LR
 
 ## 빠른 시작
 
+저장소를 받은 뒤, OS에 맞는 실행 스크립트만 실행하면 됩니다.
+처음 실행 시 `.venv` 생성과 패키지 설치를 자동으로 합니다.
+
+| OS | 실행 |
+|----|------|
+| Windows | `scripts\run-windows.bat` 더블클릭, 또는 `.\scripts\run-windows.ps1` |
+| macOS | `chmod +x scripts/run-macos.sh && ./scripts/run-macos.sh` |
+| Linux | `chmod +x scripts/run-linux.sh && ./scripts/run-linux.sh` |
+
+수동으로 실행하려면:
+
 ```bash
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
 pip install -e ".[dev]"
 python -m docuwizard
 ```
