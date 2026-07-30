@@ -19,6 +19,7 @@ SUPPORTED_SUFFIXES = {
     ".docx",
     ".xlsx",
     ".xlsm",
+    ".hwpx",
 }
 
 
@@ -32,6 +33,8 @@ def parse_file(path: Path) -> list[TextSegment]:
         return parse_docx(path)
     if suffix in {".xlsx", ".xlsm"}:
         return parse_xlsx(path)
+    if suffix == ".hwpx":
+        return parse_hwpx(path)
     raise ParseError(f"지원하지 않는 파일 형식입니다: {suffix or path.name}")
 
 
@@ -91,6 +94,67 @@ def parse_docx(path: Path) -> list[TextSegment]:
             continue
         line += 1
         segments.append(TextSegment(text=text, line_start=line, line_end=line))
+    return segments
+
+
+def parse_hwpx(path: Path) -> list[TextSegment]:
+    """Parse HWPX (Hancom Office OWPML) — a ZIP of section XML files.
+
+    Paragraphs are <hp:p> elements; their text lives in <hp:t> children.
+    Each paragraph becomes one segment with a sequential line number,
+    numbered per section (page metadata uses the section index).
+    """
+    import re
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    try:
+        archive = zipfile.ZipFile(str(path))
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ParseError(f"HWPX를 열 수 없습니다: {exc}") from exc
+
+    def section_index(name: str) -> int:
+        match = re.search(r"section(\d+)\.xml$", name)
+        return int(match.group(1)) if match else 0
+
+    segments: list[TextSegment] = []
+    with archive:
+        section_names = sorted(
+            (
+                name
+                for name in archive.namelist()
+                if name.startswith("Contents/section") and name.endswith(".xml")
+            ),
+            key=section_index,
+        )
+        if not section_names:
+            raise ParseError("HWPX에서 본문(section)을 찾을 수 없습니다.")
+        for section_no, name in enumerate(section_names, start=1):
+            try:
+                root = ET.fromstring(archive.read(name))
+            except ET.ParseError as exc:
+                raise ParseError(f"HWPX 본문 파싱 실패({name}): {exc}") from exc
+            line = 0
+            for paragraph in root.iter():
+                if not paragraph.tag.endswith("}p"):
+                    continue
+                texts = [
+                    el.text
+                    for el in paragraph.iter()
+                    if el.tag.endswith("}t") and el.text
+                ]
+                text = "".join(texts).strip()
+                if not text:
+                    continue
+                line += 1
+                segments.append(
+                    TextSegment(
+                        text=text,
+                        page=section_no if len(section_names) > 1 else None,
+                        line_start=line,
+                        line_end=line,
+                    )
+                )
     return segments
 
 

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from docuwizard.services import conversations as conversation_service
+from docuwizard.services import essentials as essentials_service
 
 
 class FavoritesPanel(QWidget):
@@ -39,7 +40,8 @@ class FavoritesPanel(QWidget):
 
         conversations = conversation_service.list_starred_conversations(self._project_id)
         messages = conversation_service.list_starred_messages(self._project_id)
-        if not conversations and not messages:
+        essentials = essentials_service.list_starred_items(self._project_id)
+        if not conversations and not messages and not essentials:
             self.list.addItem(QListWidgetItem("(즐겨찾기 없음)"))
             return
 
@@ -62,6 +64,17 @@ class FavoritesPanel(QWidget):
                 item = QListWidgetItem(f"★ [{favorite.conversation_title}] {preview}")
                 item.setData(Qt.ItemDataRole.UserRole, favorite.conversation_id)
                 item.setToolTip(favorite.message.content)
+                self.list.addItem(item)
+
+        if essentials:
+            header = QListWidgetItem("— ★ 필수 포인트 —")
+            header.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.list.addItem(header)
+            for starred in essentials:
+                entry = starred.item
+                text = f"★ [{entry.category_name} · v{starred.report_version}] {entry.summary}"
+                item = QListWidgetItem(text[:160])
+                item.setToolTip(entry.summary)
                 self.list.addItem(item)
 
     def _on_activate(self, item: QListWidgetItem) -> None:

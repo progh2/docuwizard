@@ -53,6 +53,68 @@ def test_parse_xlsx(tmp_path: Path) -> None:
     assert any(s.cell_range for s in segments)
 
 
+def _write_hwpx(path: Path, sections: list[list[str]]) -> None:
+    """Create a minimal HWPX archive with the given paragraphs per section."""
+    import zipfile
+
+    ns = 'xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"'
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        for idx, paragraphs in enumerate(sections):
+            body = "".join(
+                f"<hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p>"
+                for text in paragraphs
+            )
+            zf.writestr(
+                f"Contents/section{idx}.xml",
+                f'<?xml version="1.0" encoding="UTF-8"?><hp:sec {ns}>{body}</hp:sec>',
+            )
+
+
+def test_parse_hwpx(tmp_path: Path) -> None:
+    path = tmp_path / "doc.hwpx"
+    _write_hwpx(path, [["제출 마감일 안내", "", "평가 기준"]])
+    segments = parsers.parse_hwpx(path)
+    assert [(s.text, s.line_start) for s in segments] == [
+        ("제출 마감일 안내", 1),
+        ("평가 기준", 2),
+    ]
+    # Single section → no page metadata.
+    assert segments[0].page is None
+
+
+def test_parse_hwpx_multi_section_pages(tmp_path: Path) -> None:
+    path = tmp_path / "multi.hwpx"
+    _write_hwpx(path, [["1장 내용"], ["2장 내용"]])
+    segments = parsers.parse_hwpx(path)
+    assert [(s.text, s.page) for s in segments] == [
+        ("1장 내용", 1),
+        ("2장 내용", 2),
+    ]
+
+
+def test_parse_hwpx_rejects_non_zip(tmp_path: Path) -> None:
+    import pytest
+
+    path = tmp_path / "broken.hwpx"
+    path.write_bytes(b"not a zip")
+    with pytest.raises(parsers.ParseError):
+        parsers.parse_hwpx(path)
+
+
+def test_index_hwpx_file(tmp_path: Path) -> None:
+    from fakes import FakeOllama
+
+    project = project_service.create_project("한글")
+    src = tmp_path / "notice.hwpx"
+    _write_hwpx(src, [["제안서 마감일은 8월 1일입니다."]])
+    added = file_service.add_files(project.id, [src])[0]
+    count = index_file(project.id, added, embedder=FakeOllama())
+    assert count >= 1
+    rows = store.list_chunks_for_file(added.id)
+    assert "마감일" in rows[0]["text"]
+
+
 def test_parse_pdf(tmp_path: Path) -> None:
     path = tmp_path / "blank.pdf"
     writer = PdfWriter()
