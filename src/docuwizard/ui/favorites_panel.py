@@ -22,7 +22,12 @@ class FavoritesPanel(QWidget):
         super().__init__(parent)
         self._project_id: str | None = None
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("즐겨찾기 (★ 대화·답변)"))
+        title = QLabel("즐겨찾기")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        hint = QLabel("★ 표시한 대화·답변·필수 포인트")
+        hint.setObjectName("muted")
+        layout.addWidget(hint)
         self.list = QListWidget()
         self.list.itemDoubleClicked.connect(self._on_activate)
         layout.addWidget(self.list)

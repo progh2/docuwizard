@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QAction, QBrush, QColor, QDragEnterEvent, QDropEvent, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from docuwizard import __version__
 from docuwizard.config import load_settings
-from docuwizard.models import Project, ProjectFile
+from docuwizard.models import FileStatus, Project, ProjectFile
 from docuwizard.rag import vectors
 from docuwizard.services import files as file_service
 from docuwizard.services import projects as project_service
@@ -90,9 +90,11 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("메인")
         toolbar.setMovable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(toolbar)
 
         new_action = QAction("새 프로젝트", self)
+        new_action.setShortcut(QKeySequence("Ctrl+N"))
         new_action.triggered.connect(self.create_project)
         toolbar.addAction(new_action)
 
@@ -100,11 +102,14 @@ class MainWindow(QMainWindow):
         rename_action.triggered.connect(self.rename_project)
         toolbar.addAction(rename_action)
 
-        delete_action = QAction("프로젝트 삭제", self)
+        delete_action = QAction("삭제", self)
         delete_action.triggered.connect(self.delete_project)
         toolbar.addAction(delete_action)
 
+        toolbar.addSeparator()
+
         settings_action = QAction("설정", self)
+        settings_action.setShortcut(QKeySequence("Ctrl+,"))
         settings_action.triggered.connect(self.open_settings)
         toolbar.addAction(settings_action)
 
@@ -113,7 +118,10 @@ class MainWindow(QMainWindow):
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.addWidget(QLabel("프로젝트"))
+        left_layout.setContentsMargins(12, 12, 8, 12)
+        section = QLabel("프로젝트")
+        section.setObjectName("sectionTitle")
+        left_layout.addWidget(section)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("프로젝트 검색…")
         self.search_edit.textChanged.connect(self.refresh_projects)
@@ -121,23 +129,38 @@ class MainWindow(QMainWindow):
         self.project_list = QListWidget()
         self.project_list.currentItemChanged.connect(self._on_project_selected)
         left_layout.addWidget(self.project_list)
+        self.project_empty = QLabel(
+            "아직 프로젝트가 없습니다.\n‘새 프로젝트’로 시작해 보세요."
+        )
+        self.project_empty.setObjectName("emptyState")
+        self.project_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.project_empty.setWordWrap(True)
+        left_layout.addWidget(self.project_empty)
+        self.project_empty.setVisible(False)
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(12, 12, 12, 12)
         self.detail_title = QLabel("프로젝트를 선택하세요")
-        self.detail_title.setStyleSheet("font-size: 18px; font-weight: 600;")
-        self.detail_desc = QLabel("")
+        self.detail_title.setObjectName("pageTitle")
+        self.detail_desc = QLabel(
+            "왼쪽에서 프로젝트를 고르거나 새로 만들면\n파일을 넣고 질의응답을 시작할 수 있습니다."
+        )
+        self.detail_desc.setObjectName("muted")
         self.detail_desc.setWordWrap(True)
         right_layout.addWidget(self.detail_title)
         right_layout.addWidget(self.detail_desc)
 
         file_header = QHBoxLayout()
-        file_header.addWidget(QLabel("파일"))
+        file_label = QLabel("파일")
+        file_label.setObjectName("sectionTitle")
+        file_header.addWidget(file_label)
         file_header.addStretch(1)
         self.add_files_btn = QPushButton("파일 추가…")
         self.add_files_btn.clicked.connect(self.add_files_dialog)
         self.add_files_btn.setEnabled(False)
         self.index_btn = QPushButton("인덱싱")
+        self.index_btn.setObjectName("primaryButton")
         self.index_btn.clicked.connect(self.start_indexing)
         self.index_btn.setEnabled(False)
         self.retry_btn = QPushButton("실패 재시도")
@@ -152,7 +175,8 @@ class MainWindow(QMainWindow):
         self.cancel_index_btn = QPushButton("인덱싱 취소")
         self.cancel_index_btn.clicked.connect(self.cancel_indexing)
         self.cancel_index_btn.setEnabled(False)
-        self.delete_file_btn = QPushButton("선택 파일 삭제")
+        self.delete_file_btn = QPushButton("선택 삭제")
+        self.delete_file_btn.setObjectName("dangerButton")
         self.delete_file_btn.clicked.connect(self.delete_selected_file)
         self.delete_file_btn.setEnabled(False)
         file_header.addWidget(self.add_files_btn)
@@ -165,26 +189,34 @@ class MainWindow(QMainWindow):
 
         self.embed_hint = QLabel("")
         self.embed_hint.setWordWrap(True)
-        self.embed_hint.setStyleSheet(
-            "color: #8a4b00; background: #fff4e0; padding: 4px; border-radius: 4px;"
-        )
+        self.embed_hint.setObjectName("warningBanner")
         self.embed_hint.setVisible(False)
         right_layout.addWidget(self.embed_hint)
 
         self.file_list = DropFileList(self.import_paths)
         self.file_list.setEnabled(False)
         right_layout.addWidget(self.file_list)
+        self.file_empty = QLabel(
+            "파일을 여기로 드래그하거나 ‘파일 추가’를 누르세요.\n"
+            "추가 후 ‘인덱싱’하면 질의응답에 사용할 수 있습니다."
+        )
+        self.file_empty.setObjectName("emptyState")
+        self.file_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.file_empty.setWordWrap(True)
+        right_layout.addWidget(self.file_empty)
+        self.file_empty.setVisible(False)
 
         self.progress = QProgressBar()
         self.progress.setValue(0)
         self.progress_label = QLabel("")
+        self.progress_label.setObjectName("muted")
         right_layout.addWidget(self.progress)
         right_layout.addWidget(self.progress_label)
 
         hint = QLabel(
-            "파일을 드래그앤드롭하거나 추가한 뒤 ‘인덱싱’으로 내용을 DB에 저장하세요."
+            "지원 형식: TXT · MD · PDF · DOCX · XLSX · HWPX · 이미지(OCR)"
         )
-        hint.setStyleSheet("color: #666;")
+        hint.setObjectName("muted")
         right_layout.addWidget(hint)
 
         files_page = right
@@ -204,7 +236,8 @@ class MainWindow(QMainWindow):
         splitter.addWidget(left)
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([280, 820])
         self.setCentralWidget(splitter)
 
     def open_settings(self) -> None:
@@ -224,6 +257,7 @@ class MainWindow(QMainWindow):
             if project.id == current_id:
                 self.project_list.setCurrentItem(item)
         self.project_list.blockSignals(False)
+        self.project_empty.setVisible(self.project_list.count() == 0)
         if self.project_list.currentItem() is None:
             self._clear_detail()
         elif current_id:
@@ -445,6 +479,7 @@ class MainWindow(QMainWindow):
         self.file_list.clear()
         for file in files:
             self.file_list.addItem(self._file_item(file))
+        self.file_empty.setVisible(len(files) == 0)
         self._update_embed_hint(project_id)
 
     def _update_embed_hint(self, project_id: str) -> None:
@@ -465,15 +500,34 @@ class MainWindow(QMainWindow):
         else:
             self.embed_hint.setVisible(False)
 
+    _STATUS_LABEL = {
+        FileStatus.PENDING: "대기",
+        FileStatus.INDEXING: "인덱싱 중",
+        FileStatus.READY: "준비됨",
+        FileStatus.FAILED: "실패",
+    }
+    _STATUS_COLOR = {
+        FileStatus.PENDING: QColor("#92400e"),
+        FileStatus.INDEXING: QColor("#1d4ed8"),
+        FileStatus.READY: QColor("#047857"),
+        FileStatus.FAILED: QColor("#b91c1c"),
+    }
+
     def _file_item(self, file: ProjectFile) -> QListWidgetItem:
         size_kb = max(file.size / 1024, 0.1)
-        status = str(file.status)
+        status_label = self._STATUS_LABEL.get(file.status, str(file.status))
         if file.error:
-            status = f"{status} ({file.error})"
-        text = f"{file.original_name}  ·  {size_kb:.1f} KB  ·  {status}"
+            status_label = f"{status_label} · {file.error}"
+        text = f"{file.original_name}    {size_kb:.1f} KB    {status_label}"
         item = QListWidgetItem(text)
         item.setData(Qt.ItemDataRole.UserRole, file.id)
-        item.setToolTip(file.stored_name)
+        tip = file.stored_name
+        if file.error:
+            tip = f"{tip}\n{file.error}"
+        item.setToolTip(tip)
+        color = self._STATUS_COLOR.get(file.status)
+        if color is not None:
+            item.setForeground(QBrush(color))
         return item
 
     def _clear_detail(self) -> None:
@@ -482,9 +536,12 @@ class MainWindow(QMainWindow):
         self.essentials_panel.set_project(None)
         self.favorites_panel.set_project(None)
         self.detail_title.setText("프로젝트를 선택하세요")
-        self.detail_desc.setText("")
+        self.detail_desc.setText(
+            "왼쪽에서 프로젝트를 고르거나 새로 만들면\n파일을 넣고 질의응답을 시작할 수 있습니다."
+        )
         self.file_list.clear()
         self.file_list.setEnabled(False)
+        self.file_empty.setVisible(False)
         self.add_files_btn.setEnabled(False)
         self.delete_file_btn.setEnabled(False)
         self.index_btn.setEnabled(False)

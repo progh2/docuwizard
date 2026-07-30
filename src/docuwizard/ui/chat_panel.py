@@ -1,9 +1,9 @@
-"""Chat panel with search, stars, and citation preview (issues #18–#24)."""
+"""Chat panel with bubble transcript, search, stars, citations."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
@@ -23,6 +23,7 @@ from docuwizard.rag.orchestrator import RagAnswer
 from docuwizard.services import conversations as conversation_service
 from docuwizard.ui.chat_worker import ChatWorker
 from docuwizard.ui.citation_panel import CitationPanel
+from docuwizard.ui.message_view import TranscriptView
 
 
 class ChatPanel(QWidget):
@@ -32,16 +33,19 @@ class ChatPanel(QWidget):
         self._conversation_id: str | None = None
         self._worker: ChatWorker | None = None
         self._streaming_buffer = ""
-        self._stream_anchor = -1
         self._messages: list = []
         self._favorites_callback = None
 
         root = QHBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
         splitter = QSplitter()
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.addWidget(QLabel("대화"))
+        left_layout.setContentsMargins(0, 0, 8, 0)
+        section = QLabel("대화")
+        section.setObjectName("sectionTitle")
+        left_layout.addWidget(section)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("대화·내용 검색…")
         self.search_edit.textChanged.connect(self.refresh_conversations)
@@ -52,9 +56,11 @@ class ChatPanel(QWidget):
         self.new_btn.clicked.connect(self.create_conversation)
         self.rename_btn = QPushButton("이름 변경")
         self.rename_btn.clicked.connect(self.rename_conversation)
-        self.star_btn = QPushButton("★ 대화")
+        self.star_btn = QPushButton("★")
+        self.star_btn.setToolTip("대화 즐겨찾기")
         self.star_btn.clicked.connect(self.toggle_conversation_star)
         self.delete_btn = QPushButton("삭제")
+        self.delete_btn.setObjectName("dangerButton")
         self.delete_btn.clicked.connect(self.delete_conversation)
         btn_row.addWidget(self.new_btn)
         btn_row.addWidget(self.rename_btn)
@@ -67,6 +73,7 @@ class ChatPanel(QWidget):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(8, 0, 0, 0)
         msg_btn_row = QHBoxLayout()
         self.star_message_btn = QPushButton("★ 마지막 답변")
         self.star_message_btn.clicked.connect(self.toggle_last_answer_star)
@@ -74,20 +81,22 @@ class ChatPanel(QWidget):
         msg_btn_row.addStretch(1)
         right_layout.addLayout(msg_btn_row)
 
-        self.transcript = QPlainTextEdit()
-        self.transcript.setReadOnly(True)
+        self.transcript = TranscriptView()
         self.citation_panel = CitationPanel()
-        self.citation_panel.setMaximumHeight(180)
+        self.citation_panel.setMaximumHeight(160)
         self.input = QPlainTextEdit()
-        self.input.setPlaceholderText("질문을 입력하세요…")
-        self.input.setMaximumHeight(90)
+        self.input.setPlaceholderText("질문을 입력하세요…  (Ctrl+Enter 전송)")
+        self.input.setMaximumHeight(100)
         send_row = QHBoxLayout()
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #555;")
+        self.status_label.setObjectName("muted")
         self.stop_btn = QPushButton("중단")
+        self.stop_btn.setToolTip("Esc")
         self.stop_btn.clicked.connect(self.stop_answer)
         self.stop_btn.setEnabled(False)
         self.send_btn = QPushButton("질문하기")
+        self.send_btn.setObjectName("primaryButton")
+        self.send_btn.setToolTip("Ctrl+Enter")
         self.send_btn.clicked.connect(self.send_question)
         send_row.addWidget(self.status_label, stretch=1)
         send_row.addWidget(self.stop_btn)
@@ -102,6 +111,11 @@ class ChatPanel(QWidget):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
         root.addWidget(splitter)
+
+        QShortcut(QKeySequence("Ctrl+Return"), self.input, activated=self.send_question)
+        QShortcut(QKeySequence("Ctrl+Enter"), self.input, activated=self.send_question)
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.stop_answer)
+
         self.set_project(None)
 
     def set_favorites_callback(self, callback) -> None:
@@ -242,14 +256,10 @@ class ChatPanel(QWidget):
             self._conversation_id, role="user", content=question
         )
         self.input.clear()
-        self._append_transcript("사용자", question)
+        self.transcript.add_message("user", question)
         self.citation_panel.clear()
         self._streaming_buffer = ""
-        self._append_transcript("도우미", "")
-        # Anchor at the start of the empty assistant body for token updates.
-        text = self.transcript.toPlainText()
-        marker = "[도우미]\n"
-        self._stream_anchor = text.rfind(marker) + len(marker)
+        self.transcript.add_message("assistant", "…", streaming=True)
         self.send_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.status_label.setText("준비 중…")
@@ -291,14 +301,16 @@ class ChatPanel(QWidget):
         if not self._conversation_id:
             return
         self._messages = conversation_service.list_messages(self._conversation_id)
+        if not self._messages:
+            return
         for message in self._messages:
             if message.role == "user":
-                label = "사용자"
+                role = "user"
             elif message.is_starred:
-                label = "도우미 ★"
+                role = "assistant★"
             else:
-                label = "도우미"
-            self._append_transcript(label, message.content)
+                role = "assistant"
+            self.transcript.add_message(role, message.content)
         last_answer = next(
             (m for m in reversed(self._messages) if m.role == "assistant"),
             None,
@@ -307,35 +319,17 @@ class ChatPanel(QWidget):
             chunks = conversation_service.get_chunks_by_ids(last_answer.citation_ids)
             self.citation_panel.set_chunks(chunks)
 
-    def _append_transcript(self, role: str, content: str) -> None:
-        cursor = self.transcript.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        existing = self.transcript.toPlainText()
-        prefix = "\n" if existing.strip() else ""
-        cursor.insertText(f"{prefix}[{role}]\n{content}\n")
-        self.transcript.setTextCursor(cursor)
-        self.transcript.ensureCursorVisible()
-
     def _on_status(self, message: str) -> None:
         self.status_label.setText(message)
 
     def _on_token(self, token: str) -> None:
-        """Append streamed tokens without rewriting prior messages."""
         self._streaming_buffer += token
-        cursor = self.transcript.textCursor()
-        if self._stream_anchor < 0:
-            return
-        cursor.setPosition(self._stream_anchor)
-        cursor.movePosition(
-            QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor
-        )
-        cursor.insertText(self._streaming_buffer + "\n")
-        self.transcript.setTextCursor(cursor)
-        self.transcript.ensureCursorVisible()
+        self.transcript.update_streaming(self._streaming_buffer)
 
     def _on_finished(self, answer: RagAnswer) -> None:
         self.send_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.transcript.finish_streaming()
         self.status_label.setText(f"완료 · {answer.model}")
         if not self._conversation_id:
             return
@@ -358,6 +352,7 @@ class ChatPanel(QWidget):
     def _on_cancelled(self, partial: str) -> None:
         self.send_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.transcript.finish_streaming()
         self.status_label.setText("중단됨")
         if self._conversation_id and partial.strip():
             conversation_service.add_message(
@@ -371,6 +366,7 @@ class ChatPanel(QWidget):
     def _on_failed(self, message: str) -> None:
         self.send_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.transcript.finish_streaming()
         self.status_label.setText("실패")
-        self._append_transcript("오류", message)
+        self.transcript.add_message("error", message)
         QMessageBox.warning(self, "질의 실패", message)

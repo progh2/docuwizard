@@ -31,7 +31,12 @@ class EssentialsPanel(QWidget):
         layout = QVBoxLayout(self)
 
         top_row = QHBoxLayout()
+        title = QLabel("필수 포인트")
+        title.setObjectName("sectionTitle")
+        top_row.addWidget(title)
+        top_row.addStretch(1)
         self.generate_btn = QPushButton("리포트 생성")
+        self.generate_btn.setObjectName("primaryButton")
         self.generate_btn.clicked.connect(self.generate_report)
         top_row.addWidget(self.generate_btn)
         self.version_combo = QComboBox()
@@ -46,7 +51,7 @@ class EssentialsPanel(QWidget):
         layout.addLayout(top_row)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #555;")
+        self.status_label.setObjectName("muted")
         layout.addWidget(self.status_label)
 
         self.list = QListWidget()

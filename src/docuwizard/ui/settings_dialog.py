@@ -73,9 +73,7 @@ class SettingsDialog(QDialog):
 
         self.external_warning = QLabel(EXTERNAL_WARNING)
         self.external_warning.setWordWrap(True)
-        self.external_warning.setStyleSheet(
-            "color: #8a4b00; background: #fff4e0; padding: 6px; border-radius: 4px;"
-        )
+        self.external_warning.setObjectName("warningBanner")
         layout.addWidget(self.external_warning)
 
         # --- Ollama (local) ------------------------------------------------
