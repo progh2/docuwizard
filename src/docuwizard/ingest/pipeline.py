@@ -63,10 +63,16 @@ def index_file(
         )
         if chunks:
             client = embedder or OllamaClient(OllamaConfig.from_settings(settings))
-            try:
-                embeddings = client.embed([c.text for c in chunks])
-            except OllamaError as exc:
-                raise IndexingError(f"임베딩 실패: {exc}") from exc
+            batch_size = max(int(settings.get("rag", {}).get("embed_batch_size", 32)), 1)
+            embeddings: list[list[float]] = []
+            for start in range(0, len(chunks), batch_size):
+                if cancel_check and cancel_check():
+                    raise IndexingError("인덱싱이 취소되었습니다.")
+                batch = chunks[start : start + batch_size]
+                try:
+                    embeddings.extend(client.embed([c.text for c in batch]))
+                except OllamaError as exc:
+                    raise IndexingError(f"임베딩 실패: {exc}") from exc
             if len(embeddings) != len(chunks):
                 raise IndexingError("임베딩 개수가 청크 개수와 일치하지 않습니다.")
             vectors.upsert_embeddings(
@@ -152,4 +158,5 @@ def _with_status(
         status=status,
         error=error,
         added_at=file.added_at,
+        content_hash=file.content_hash,
     )

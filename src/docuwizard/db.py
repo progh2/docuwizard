@@ -9,7 +9,7 @@ from pathlib import Path
 
 from docuwizard.paths import db_path, ensure_app_dirs
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 MIGRATIONS: dict[int, str] = {
     1: """
@@ -141,6 +141,10 @@ MIGRATIONS: dict[int, str] = {
         DELETE FROM chunks_fts WHERE rowid = old.rowid;
         INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
     END;
+    """,
+    4: """
+    ALTER TABLE files ADD COLUMN content_hash TEXT;
+    CREATE INDEX IF NOT EXISTS idx_files_hash ON files(project_id, content_hash);
     """,
 }
 

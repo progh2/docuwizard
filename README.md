@@ -122,6 +122,12 @@ pytest -q
 
 Ollama 설치 후 예: `ollama pull gemma2` (모델명은 설정에서 변경)
 
+이미지 OCR(스캔본·사진 속 글자 추출)을 쓰려면 Tesseract 설치가 필요합니다.
+
+- Windows: https://github.com/UB-Mannheim/tesseract/wiki (설치 시 Korean 언어팩 선택)
+- macOS: `brew install tesseract tesseract-lang`
+- Linux: `apt install tesseract-ocr tesseract-ocr-kor`
+
 ## 보안 안내
 
 - **기본 모드**에서는 문서가 외부로 전송되지 않습니다.

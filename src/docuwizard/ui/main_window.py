@@ -26,7 +26,9 @@ from PySide6.QtWidgets import (
 )
 
 from docuwizard import __version__
+from docuwizard.config import load_settings
 from docuwizard.models import Project, ProjectFile
+from docuwizard.rag import vectors
 from docuwizard.services import files as file_service
 from docuwizard.services import projects as project_service
 from docuwizard.services.files import FileError
@@ -141,6 +143,12 @@ class MainWindow(QMainWindow):
         self.retry_btn = QPushButton("실패 재시도")
         self.retry_btn.clicked.connect(self.retry_failed_indexing)
         self.retry_btn.setEnabled(False)
+        self.reindex_all_btn = QPushButton("전체 재인덱싱")
+        self.reindex_all_btn.clicked.connect(self.reindex_all)
+        self.reindex_all_btn.setEnabled(False)
+        self.reindex_all_btn.setToolTip(
+            "모든 파일을 다시 파싱·임베딩합니다. 임베딩 모델을 바꿨을 때 실행하세요."
+        )
         self.cancel_index_btn = QPushButton("인덱싱 취소")
         self.cancel_index_btn.clicked.connect(self.cancel_indexing)
         self.cancel_index_btn.setEnabled(False)
@@ -150,9 +158,18 @@ class MainWindow(QMainWindow):
         file_header.addWidget(self.add_files_btn)
         file_header.addWidget(self.index_btn)
         file_header.addWidget(self.retry_btn)
+        file_header.addWidget(self.reindex_all_btn)
         file_header.addWidget(self.cancel_index_btn)
         file_header.addWidget(self.delete_file_btn)
         right_layout.addLayout(file_header)
+
+        self.embed_hint = QLabel("")
+        self.embed_hint.setWordWrap(True)
+        self.embed_hint.setStyleSheet(
+            "color: #8a4b00; background: #fff4e0; padding: 4px; border-radius: 4px;"
+        )
+        self.embed_hint.setVisible(False)
+        right_layout.addWidget(self.embed_hint)
 
         self.file_list = DropFileList(self.import_paths)
         self.file_list.setEnabled(False)
@@ -287,10 +304,17 @@ class MainWindow(QMainWindow):
         if not self._selected_project_id:
             return
         try:
-            file_service.add_files(self._selected_project_id, paths)
+            added = file_service.add_files(self._selected_project_id, paths)
         except (FileError, ProjectError, OSError) as exc:
             QMessageBox.warning(self, "파일 추가 실패", str(exc))
             return
+        skipped = len(paths) - len(added)
+        if skipped > 0:
+            QMessageBox.information(
+                self,
+                "중복 파일 건너뜀",
+                f"{skipped}개 파일은 동일한 내용이 이미 프로젝트에 있어 건너뛰었습니다.",
+            )
         self._load_project_detail(self._selected_project_id)
 
     def delete_selected_file(self) -> None:
@@ -322,6 +346,18 @@ class MainWindow(QMainWindow):
 
     def retry_failed_indexing(self) -> None:
         self._start_worker(only_failed_or_pending=True)
+
+    def reindex_all(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "전체 재인덱싱",
+            "모든 파일을 다시 파싱하고 임베딩합니다. 파일이 많으면 오래 걸릴 수 있습니다.\n"
+            "계속할까요?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._start_worker(only_failed_or_pending=False)
 
     def cancel_indexing(self) -> None:
         if self._worker and self._worker.isRunning():
@@ -371,6 +407,7 @@ class MainWindow(QMainWindow):
         enabled = bool(self._selected_project_id) and not running
         self.index_btn.setEnabled(enabled)
         self.retry_btn.setEnabled(enabled)
+        self.reindex_all_btn.setEnabled(enabled)
         self.cancel_index_btn.setEnabled(running)
         self.add_files_btn.setEnabled(enabled)
         self.delete_file_btn.setEnabled(enabled)
@@ -402,11 +439,31 @@ class MainWindow(QMainWindow):
         self.delete_file_btn.setEnabled(not running)
         self.index_btn.setEnabled(not running)
         self.retry_btn.setEnabled(not running)
+        self.reindex_all_btn.setEnabled(not running)
         self.cancel_index_btn.setEnabled(running)
         self.file_list.setEnabled(True)
         self.file_list.clear()
         for file in files:
             self.file_list.addItem(self._file_item(file))
+        self._update_embed_hint(project_id)
+
+    def _update_embed_hint(self, project_id: str) -> None:
+        embed_model = str(
+            load_settings().get("llm", {}).get("ollama_embed_model", "")
+        )
+        try:
+            stale = vectors.count_stale_embeddings(project_id, embed_model)
+        except Exception:  # noqa: BLE001 — hint only, never block the UI
+            stale = 0
+        if stale > 0:
+            self.embed_hint.setText(
+                f"⚠ 임베딩 모델이 변경되었습니다. 문서 조각 {stale}개가 이전 모델"
+                f"(현재: {embed_model})로 색인되어 검색에서 제외됩니다. "
+                "‘전체 재인덱싱’을 실행하세요."
+            )
+            self.embed_hint.setVisible(True)
+        else:
+            self.embed_hint.setVisible(False)
 
     def _file_item(self, file: ProjectFile) -> QListWidgetItem:
         size_kb = max(file.size / 1024, 0.1)
@@ -432,7 +489,9 @@ class MainWindow(QMainWindow):
         self.delete_file_btn.setEnabled(False)
         self.index_btn.setEnabled(False)
         self.retry_btn.setEnabled(False)
+        self.reindex_all_btn.setEnabled(False)
         self.cancel_index_btn.setEnabled(False)
+        self.embed_hint.setVisible(False)
 
     def _open_favorite_conversation(self, conversation_id: str) -> None:
         self.tabs.setCurrentWidget(self.chat_panel)

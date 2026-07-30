@@ -41,14 +41,16 @@ def upsert_file(file: ProjectFile, *, db: Path | None = None) -> None:
         conn.execute(
             """
             INSERT INTO files(
-                id, project_id, original_name, stored_name, size, status, error, added_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                id, project_id, original_name, stored_name, size, status, error,
+                added_at, content_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 original_name=excluded.original_name,
                 stored_name=excluded.stored_name,
                 size=excluded.size,
                 status=excluded.status,
-                error=excluded.error
+                error=excluded.error,
+                content_hash=excluded.content_hash
             """,
             (
                 file.id,
@@ -59,6 +61,7 @@ def upsert_file(file: ProjectFile, *, db: Path | None = None) -> None:
                 str(file.status),
                 file.error,
                 file.added_at,
+                file.content_hash,
             ),
         )
 

@@ -121,6 +121,26 @@ def search_project(
     return scored[: max(top_k, 0)]
 
 
+def count_stale_embeddings(
+    project_id: str,
+    model: str,
+    *,
+    db: Path | None = None,
+) -> int:
+    """Chunks indexed with a different embedding model (invisible to search)."""
+    with db_session(db) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM embeddings e
+            JOIN chunks c ON c.id = e.chunk_id
+            WHERE c.project_id = ? AND e.model != ?
+            """,
+            (project_id, model),
+        ).fetchone()
+    return int(row[0])
+
+
 _WORD = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 
 

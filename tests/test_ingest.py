@@ -115,6 +115,101 @@ def test_index_hwpx_file(tmp_path: Path) -> None:
     assert "마감일" in rows[0]["text"]
 
 
+def test_parse_image_ocr(tmp_path: Path, monkeypatch) -> None:
+    import pytesseract
+    from PIL import Image
+
+    path = tmp_path / "scan.png"
+    Image.new("RGB", (60, 20), "white").save(path)
+    monkeypatch.setattr(
+        pytesseract,
+        "image_to_string",
+        lambda img, lang=None: "마감일 안내\n\n8월 1일\n",
+    )
+    segments = parsers.parse_image(path)
+    assert [(s.text, s.line_start) for s in segments] == [
+        ("마감일 안내", 1),
+        ("8월 1일", 3),
+    ]
+
+
+def test_parse_image_missing_tesseract(tmp_path: Path, monkeypatch) -> None:
+    import pytesseract
+    import pytest
+    from PIL import Image
+
+    path = tmp_path / "scan.png"
+    Image.new("RGB", (60, 20), "white").save(path)
+
+    def raise_missing(img, lang=None):
+        raise pytesseract.TesseractNotFoundError()
+
+    monkeypatch.setattr(pytesseract, "image_to_string", raise_missing)
+    with pytest.raises(parsers.ParseError, match="Tesseract"):
+        parsers.parse_image(path)
+
+
+def test_add_files_skips_duplicate_content(tmp_path: Path) -> None:
+    project = project_service.create_project("중복")
+    a = tmp_path / "a.txt"
+    a.write_text("같은 내용", encoding="utf-8")
+    b = tmp_path / "b.txt"
+    b.write_text("같은 내용", encoding="utf-8")
+    c = tmp_path / "c.txt"
+    c.write_text("다른 내용", encoding="utf-8")
+
+    added = file_service.add_files(project.id, [a, b, c])
+    assert [f.original_name for f in added] == ["a.txt", "c.txt"]
+    assert all(f.content_hash for f in added)
+
+    # Re-adding an identical file is skipped too.
+    assert file_service.add_files(project.id, [a]) == []
+    assert len(file_service.list_files(project.id)) == 2
+
+
+def test_index_embeds_in_batches(tmp_path: Path, monkeypatch) -> None:
+    import copy
+
+    from docuwizard.config import DEFAULT_SETTINGS
+    from fakes import FakeOllama
+
+    calls: list[int] = []
+
+    class CountingOllama(FakeOllama):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            calls.append(len(texts))
+            return super().embed(texts)
+
+    settings = copy.deepcopy(DEFAULT_SETTINGS)
+    settings["rag"]["embed_batch_size"] = 2
+    monkeypatch.setattr("docuwizard.ingest.pipeline.load_settings", lambda: settings)
+
+    project = project_service.create_project("배치")
+    src = tmp_path / "long.txt"
+    src.write_text("\n".join(f"{i}번째 줄 " + "가나다라" * 40 for i in range(30)), encoding="utf-8")
+    added = file_service.add_files(project.id, [src])[0]
+    count = index_file(project.id, added, embedder=CountingOllama())
+
+    assert count > 2
+    assert len(calls) >= 2
+    assert all(size <= 2 for size in calls)
+    assert sum(calls) == count
+
+
+def test_count_stale_embeddings(tmp_path: Path) -> None:
+    from docuwizard.rag import vectors
+    from fakes import FakeOllama
+
+    project = project_service.create_project("모델변경")
+    src = tmp_path / "a.txt"
+    src.write_text("마감일은 금요일입니다.", encoding="utf-8")
+    added = file_service.add_files(project.id, [src])[0]
+    index_file(project.id, added, embedder=FakeOllama())
+
+    assert vectors.count_stale_embeddings(project.id, "fake-embed") == 0
+    assert vectors.count_stale_embeddings(project.id, "새-모델") >= 1
+
+
 def test_parse_pdf(tmp_path: Path) -> None:
     path = tmp_path / "blank.pdf"
     writer = PdfWriter()

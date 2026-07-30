@@ -1,7 +1,8 @@
-"""Import and manage project source files (issue #6, #7)."""
+"""Import and manage project source files (issue #6, #7, #43)."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import uuid
@@ -26,20 +27,34 @@ def list_files(project_id: str) -> list[ProjectFile]:
     return [ProjectFile.from_dict(item) for item in raw]
 
 
-def add_files(project_id: str, sources: list[Path]) -> list[ProjectFile]:
-    """Copy source files into the project files/ directory and update the manifest."""
+def add_files(
+    project_id: str,
+    sources: list[Path],
+    *,
+    skip_duplicates: bool = True,
+) -> list[ProjectFile]:
+    """Copy source files into the project files/ directory and update the manifest.
+
+    Files whose content hash matches an existing project file are skipped
+    (compare the returned list against ``sources`` to detect skips).
+    """
     project = project_service.get_project(project_id)
     store.upsert_project(project)
     files_dir = project_service.project_files_dir(project_id)
     files_dir.mkdir(parents=True, exist_ok=True)
 
     current = list_files(project_id)
+    known_hashes = {f.content_hash for f in current if f.content_hash}
     added: list[ProjectFile] = []
 
     for source in sources:
         src = Path(source)
         if not src.is_file():
             raise FileError(f"파일이 아닙니다: {src}")
+
+        content_hash = _hash_file(src)
+        if skip_duplicates and content_hash in known_hashes:
+            continue
 
         file_id = uuid.uuid4().hex
         stored_name = _unique_stored_name(files_dir, src.name)
@@ -53,14 +68,24 @@ def add_files(project_id: str, sources: list[Path]) -> list[ProjectFile]:
             stored_name=stored_name,
             size=dest.stat().st_size,
             status=FileStatus.PENDING,
+            content_hash=content_hash,
         )
         current.append(record)
         added.append(record)
+        known_hashes.add(content_hash)
         store.upsert_file(record)
 
     _write_manifest(project_id, current)
     project_service.touch_project(project_id)
     return added
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def update_file_status(
@@ -83,6 +108,7 @@ def update_file_status(
             status=status,
             error=error,
             added_at=item.added_at,
+            content_hash=item.content_hash,
         )
         current[idx] = updated
         break

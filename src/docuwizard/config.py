@@ -26,6 +26,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "rag": {
         "top_k": 5,
+        "embed_batch_size": 32,
     },
     "ui": {
         "language": "ko",

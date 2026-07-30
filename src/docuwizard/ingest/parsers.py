@@ -11,6 +11,8 @@ class ParseError(Exception):
     """Raised when a document cannot be parsed."""
 
 
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
 SUPPORTED_SUFFIXES = {
     ".txt",
     ".md",
@@ -20,6 +22,7 @@ SUPPORTED_SUFFIXES = {
     ".xlsx",
     ".xlsm",
     ".hwpx",
+    *IMAGE_SUFFIXES,
 }
 
 
@@ -35,6 +38,8 @@ def parse_file(path: Path) -> list[TextSegment]:
         return parse_xlsx(path)
     if suffix == ".hwpx":
         return parse_hwpx(path)
+    if suffix in IMAGE_SUFFIXES:
+        return parse_image(path)
     raise ParseError(f"지원하지 않는 파일 형식입니다: {suffix or path.name}")
 
 
@@ -94,6 +99,40 @@ def parse_docx(path: Path) -> list[TextSegment]:
             continue
         line += 1
         segments.append(TextSegment(text=text, line_start=line, line_end=line))
+    return segments
+
+
+def parse_image(path: Path) -> list[TextSegment]:
+    """OCR an image with Tesseract (Korean+English, falls back to default)."""
+    import pytesseract
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        image = Image.open(str(path))
+    except (OSError, UnidentifiedImageError) as exc:
+        raise ParseError(f"이미지를 열 수 없습니다: {exc}") from exc
+
+    with image:
+        try:
+            try:
+                text = pytesseract.image_to_string(image, lang="kor+eng")
+            except pytesseract.TesseractError:
+                # Korean language pack may be missing; retry with defaults.
+                text = pytesseract.image_to_string(image)
+        except pytesseract.TesseractNotFoundError as exc:
+            raise ParseError(
+                "Tesseract OCR이 설치되어 있지 않습니다. "
+                "Windows: https://github.com/UB-Mannheim/tesseract/wiki 에서 설치 "
+                "(한국어 언어팩 포함), macOS: brew install tesseract tesseract-lang, "
+                "Linux: apt install tesseract-ocr tesseract-ocr-kor"
+            ) from exc
+
+    segments: list[TextSegment] = []
+    for idx, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        segments.append(TextSegment(text=stripped, line_start=idx, line_end=idx))
     return segments
 
 

@@ -56,6 +56,7 @@ class ProjectFile:
     status: FileStatus = FileStatus.PENDING
     error: str | None = None
     added_at: str = field(default_factory=utc_now_iso)
+    content_hash: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -67,6 +68,7 @@ class ProjectFile:
             "status": str(self.status),
             "error": self.error,
             "added_at": self.added_at,
+            "content_hash": self.content_hash,
         }
 
     @classmethod
@@ -80,4 +82,5 @@ class ProjectFile:
             status=FileStatus(data.get("status", FileStatus.PENDING)),
             error=data.get("error"),
             added_at=data.get("added_at", utc_now_iso()),
+            content_hash=data.get("content_hash"),
         )
