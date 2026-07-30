@@ -122,11 +122,71 @@ pytest -q
 
 Ollama 설치 후 예: `ollama pull gemma2` (모델명은 설정에서 변경)
 
-이미지 OCR(스캔본·사진 속 글자 추출)을 쓰려면 Tesseract 설치가 필요합니다.
+## 이미지 OCR 준비 — Tesseract 설치
 
-- Windows: https://github.com/UB-Mannheim/tesseract/wiki (설치 시 Korean 언어팩 선택)
-- macOS: `brew install tesseract tesseract-lang`
-- Linux: `apt install tesseract-ocr tesseract-ocr-kor`
+### Tesseract란?
+
+**Tesseract**는 이미지 속 글자를 텍스트로 바꿔 주는 무료 오픈소스
+OCR(광학 문자 인식) 엔진입니다. 구글이 오랫동안 관리해 왔고, 한국어를 포함한
+100여 개 언어를 지원합니다.
+
+DocuWizard에서는 스캔한 공고문, 사진으로 찍은 안내문, 캡처 이미지 같은
+**이미지 파일(PNG/JPG/BMP/TIFF/WebP)을 프로젝트에 추가할 때만** 사용됩니다.
+텍스트·PDF·워드·엑셀·한글 문서만 쓴다면 설치하지 않아도 됩니다.
+
+Tesseract는 파이썬 패키지가 아니라 **별도 프로그램**이라서 한 번만 직접
+설치해 주면 됩니다. OCR 처리도 인터넷 연결 없이 전부 내 컴퓨터 안에서
+이루어지므로 이미지가 외부로 전송되지 않습니다.
+
+### Windows 설치 (권장: UB Mannheim 빌드)
+
+1. 다운로드 페이지에서 최신 설치 파일(`tesseract-ocr-w64-setup-….exe`)을
+   받습니다: https://github.com/UB-Mannheim/tesseract/wiki
+2. 설치 파일을 실행하고 안내를 따라 진행합니다.
+3. **중요:** "Choose components(구성 요소 선택)" 화면에서
+   **Additional language data** 항목을 펼쳐 **Korean**을 체크하세요.
+   이걸 빠뜨리면 한국어 이미지가 인식되지 않습니다.
+   (빠뜨렸다면 설치 파일을 다시 실행해 추가하면 됩니다.)
+4. 설치 경로는 기본값(`C:\Program Files\Tesseract-OCR`)을 그대로 두면 됩니다.
+5. 설치 마지막 단계 또는 설치 후에 Tesseract가 **PATH**에 등록되어야
+   DocuWizard가 찾을 수 있습니다. 확인 방법: 새 명령 프롬프트(cmd)를 열고
+
+```bash
+tesseract --version
+```
+
+   버전이 출력되면 성공입니다. "명령을 찾을 수 없습니다"가 나오면
+   `시스템 환경 변수 편집 → 환경 변수 → Path → 새로 만들기`에
+   `C:\Program Files\Tesseract-OCR`를 추가한 뒤 **DocuWizard를 재시작**하세요.
+
+### macOS 설치
+
+```bash
+brew install tesseract tesseract-lang
+```
+
+`tesseract-lang`에 한국어를 포함한 추가 언어팩이 들어 있습니다.
+
+### Linux (Ubuntu/Debian) 설치
+
+```bash
+sudo apt install tesseract-ocr tesseract-ocr-kor
+```
+
+### 설치 확인
+
+```bash
+tesseract --version        # 버전이 나오면 설치 성공
+tesseract --list-langs     # 목록에 kor가 있으면 한국어 인식 가능
+```
+
+### 자주 겪는 문제
+
+| 증상 | 원인 · 해결 |
+|------|-------------|
+| 이미지 인덱싱 시 "Tesseract OCR이 설치되어 있지 않습니다" 오류 | Tesseract 미설치 또는 PATH 미등록. 위 설치 후 앱 재시작 |
+| 한국어가 깨지거나 빈 결과 | 한국어 언어팩(kor) 누락. `tesseract --list-langs`로 확인 후 언어팩 추가 (한국어 팩이 없으면 자동으로 영어로만 재시도합니다) |
+| 인식 정확도가 낮음 | 해상도가 낮거나 기울어진 이미지는 인식률이 떨어집니다. 300dpi 이상 스캔, 수평 맞춤, 선명한 원본을 권장 |
 
 ## 보안 안내
 
