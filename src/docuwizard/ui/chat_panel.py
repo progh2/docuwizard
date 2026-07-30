@@ -80,9 +80,11 @@ class ChatPanel(QWidget):
         self.input.setPlaceholderText("질문을 입력하세요…")
         self.input.setMaximumHeight(90)
         send_row = QHBoxLayout()
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #555;")
         self.send_btn = QPushButton("질문하기")
         self.send_btn.clicked.connect(self.send_question)
-        send_row.addStretch(1)
+        send_row.addWidget(self.status_label, stretch=1)
         send_row.addWidget(self.send_btn)
         right_layout.addWidget(self.transcript, stretch=3)
         right_layout.addWidget(self.citation_panel)
@@ -234,8 +236,10 @@ class ChatPanel(QWidget):
         self._streaming_buffer = ""
         self._append_transcript("도우미", "")
         self.send_btn.setEnabled(False)
+        self.status_label.setText("준비 중…")
         self._worker = ChatWorker(self._project_id, question, parent=self)
         self._worker.token.connect(self._on_token)
+        self._worker.status.connect(self._on_status)
         self._worker.finished_ok.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
@@ -286,6 +290,9 @@ class ChatPanel(QWidget):
             self.transcript.verticalScrollBar().maximum()
         )
 
+    def _on_status(self, message: str) -> None:
+        self.status_label.setText(message)
+
     def _on_token(self, token: str) -> None:
         self._streaming_buffer += token
         text = self.transcript.toPlainText()
@@ -301,6 +308,7 @@ class ChatPanel(QWidget):
 
     def _on_finished(self, answer: RagAnswer) -> None:
         self.send_btn.setEnabled(True)
+        self.status_label.setText(f"완료 · {answer.model}")
         if not self._conversation_id:
             return
         conversation_service.add_message(
@@ -321,5 +329,6 @@ class ChatPanel(QWidget):
 
     def _on_failed(self, message: str) -> None:
         self.send_btn.setEnabled(True)
+        self.status_label.setText("실패")
         self._append_transcript("오류", message)
         QMessageBox.warning(self, "질의 실패", message)

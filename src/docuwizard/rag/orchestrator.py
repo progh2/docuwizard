@@ -33,12 +33,18 @@ def answer_question(
     db: Path | None = None,
     stream: bool = False,
     on_token=None,
+    on_status=None,
 ) -> RagAnswer:
     cfg = settings or load_settings()
     ollama = client or OllamaClient(OllamaConfig.from_settings(cfg))
     top_k = int(cfg.get("rag", {}).get("top_k", 5))
     embed_model = ollama.config.embed_model
 
+    def status(message: str) -> None:
+        if on_status:
+            on_status(message)
+
+    status(f"질문 임베딩 중… ({embed_model})")
     try:
         query_vecs = ollama.embed([question])
     except OllamaError as exc:
@@ -46,6 +52,7 @@ def answer_question(
     if not query_vecs:
         raise RagError("질문 임베딩을 만들지 못했습니다.")
 
+    status("관련 문서 검색 중…")
     citations = vectors.search_project(
         project_id,
         query_vecs[0],
@@ -54,10 +61,18 @@ def answer_question(
         db=db,
     )
     messages = prompt.build_messages(question, citations)
+    status(
+        f"모델 응답 대기 중… ({ollama.config.chat_model}) "
+        f"— 큰 모델은 첫 글자까지 수 분이 걸릴 수 있습니다"
+    )
     try:
         if stream and on_token is not None:
             parts: list[str] = []
+            first = True
             for token in ollama.chat_stream(messages):
+                if first:
+                    status(f"응답 생성 중… ({ollama.config.chat_model})")
+                    first = False
                 parts.append(token)
                 on_token(token)
             text = "".join(parts)

@@ -9,6 +9,7 @@ from docuwizard.rag.orchestrator import RagError, answer_question
 
 class ChatWorker(QThread):
     token = Signal(str)
+    status = Signal(str)
     finished_ok = Signal(object)  # RagAnswer
     failed = Signal(str)
 
@@ -24,6 +25,7 @@ class ChatWorker(QThread):
                 self.question,
                 stream=True,
                 on_token=lambda t: self.token.emit(t),
+                on_status=lambda s: self.status.emit(s),
             )
             self.finished_ok.emit(answer)
         except RagError as exc:

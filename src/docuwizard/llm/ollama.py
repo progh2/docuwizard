@@ -83,27 +83,13 @@ class OllamaClient:
             vectors.append([float(x) for x in embedding])
         return vectors
 
-    def chat(self, messages: list[dict[str, str]], *, stream: bool = False) -> str:
-        if stream:
-            return "".join(self.chat_stream(messages))
-        payload = {
-            "model": self.config.chat_model,
-            "messages": messages,
-            "stream": False,
-        }
-        data = self._request_json("POST", "/api/chat", payload)
-        message = data.get("message") or {}
-        content = message.get("content")
-        if not isinstance(content, str):
-            raise OllamaError("채팅 응답 형식이 올바르지 않습니다.")
-        return content
-
     def chat_stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
         """Yield tokens while reading the Ollama NDJSON stream."""
         payload = {
             "model": self.config.chat_model,
             "messages": messages,
             "stream": True,
+            "keep_alive": "30m",
         }
         request = self._build_request("POST", "/api/chat", payload)
         try:
@@ -116,6 +102,9 @@ class OllamaClient:
                         data = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    # Loading / error events from Ollama (when present)
+                    if data.get("error"):
+                        raise OllamaError(str(data["error"]))
                     message = data.get("message") or {}
                     content = message.get("content")
                     if isinstance(content, str) and content:
@@ -126,13 +115,36 @@ class OllamaClient:
             raise OllamaError(
                 f"Ollama 응답 시간 초과 ({self.config.timeout_sec:.0f}초). "
                 f"채팅 모델 '{self.config.chat_model}' 로딩/생성이 오래 걸렸습니다. "
-                "설정에서 타임아웃을 늘리거나 더 작은 모델을 선택하세요."
+                "큰 모델(12b+)은 첫 토큰까지 수 분이 걸릴 수 있습니다. "
+                "설정에서 타임아웃을 늘리거나 gemma:2b 같은 작은 모델로 시험하세요."
             ) from exc
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise OllamaError(f"Ollama HTTP {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
             raise self._wrap_url_error(exc) from exc
+
+    def chat(self, messages: list[dict[str, str]], *, stream: bool = False) -> str:
+        if stream:
+            return "".join(self.chat_stream(messages))
+        payload = {
+            "model": self.config.chat_model,
+            "messages": messages,
+            "stream": False,
+            "keep_alive": "30m",
+        }
+        data = self._request_json("POST", "/api/chat", payload)
+        message = data.get("message") or {}
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise OllamaError("채팅 응답 형식이 올바르지 않습니다.")
+        return content
+
+    def warmup(self) -> str:
+        """Load the chat model with a tiny prompt so later questions start faster."""
+        t0_msg = [{"role": "user", "content": "ping"}]
+        first = next(self.chat_stream(t0_msg), "")
+        return f"모델 '{self.config.chat_model}' 예열 완료 (첫 응답: {first[:40]!r})"
 
     def _request_json(self, method: str, path: str, payload: dict | None = None) -> dict:
         body = self._request_raw(method, path, payload)

@@ -65,8 +65,9 @@ class SettingsDialog(QDialog):
         layout.addLayout(form)
 
         hint = QLabel(
-            "채팅 모델(질문 답변)과 임베딩 모델(문서 검색용 벡터)은 서로 다릅니다. "
-            "예: 채팅 gemma*, 임베딩 nomic-embed-text."
+            "채팅 모델(질문 답변)과 임베딩 모델(문서 검색용 벡터)은 서로 다릅니다.\n"
+            "예: 채팅 gemma:2b(빠름) / gemma4:12b(느림), 임베딩 nomic-embed-text.\n"
+            "12b급은 첫 응답까지 수 분이 걸릴 수 있으니 타임아웃을 충분히 두세요."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #555;")
@@ -77,9 +78,12 @@ class SettingsDialog(QDialog):
         self.refresh_btn.clicked.connect(self.refresh_models)
         self.test_btn = QPushButton("연결 테스트")
         self.test_btn.clicked.connect(self.test_connection)
+        self.warmup_btn = QPushButton("채팅 모델 예열")
+        self.warmup_btn.clicked.connect(self.warmup_chat_model)
         self.test_result = QLabel("")
         test_row.addWidget(self.refresh_btn)
         test_row.addWidget(self.test_btn)
+        test_row.addWidget(self.warmup_btn)
         test_row.addWidget(self.test_result, stretch=1)
         layout.addLayout(test_row)
 
@@ -135,6 +139,17 @@ class SettingsDialog(QDialog):
         except OllamaError as exc:
             self.test_result.setText(str(exc))
             QMessageBox.warning(self, "연결 실패", str(exc))
+
+    def warmup_chat_model(self) -> None:
+        client = self._client_from_form()
+        self.test_result.setText(f"예열 중… ({client.config.chat_model})")
+        try:
+            message = client.warmup()
+            self.test_result.setText(message)
+            QMessageBox.information(self, "예열 완료", message)
+        except OllamaError as exc:
+            self.test_result.setText(str(exc))
+            QMessageBox.warning(self, "예열 실패", str(exc))
 
     def save(self) -> None:
         chat = self.chat_model.currentText().strip()
