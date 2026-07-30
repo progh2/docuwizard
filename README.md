@@ -199,29 +199,30 @@ tesseract --list-langs     # 목록에 kor가 있으면 한국어 인식 가능
 | 한국어가 깨지거나 빈 결과 | 한국어 언어팩(kor) 누락. `tesseract --list-langs`로 확인 후 언어팩 추가 (한국어 팩이 없으면 자동으로 영어로만 재시도합니다) |
 | 인식 정확도가 낮음 | 해상도가 낮거나 기울어진 이미지는 인식률이 떨어집니다. 300dpi 이상 스캔, 수평 맞춤, 선명한 원본을 권장 |
 
-## 실행 파일 빌드 (Windows)
+## 실행 파일 빌드
 
-개발용으로 `python -m docuwizard`를 쓰는 것이 가장 쉽습니다. 배포용 폴더형
-실행 파일은 PyInstaller로 만들 수 있습니다.
+개발용으로는 위 실행 스크립트가 가장 쉽습니다. 배포용 폴더형 실행 파일은
+PyInstaller로 만들 수 있습니다.
 
-```powershell
-.\packaging\build.ps1
-# 결과: dist\DocuWizard\DocuWizard.exe
-```
+**Windows:** `.\packaging\build.ps1` → `dist\DocuWizard\DocuWizard.exe`
 
-수동 빌드:
+**macOS / Linux:**
 
 ```bash
-pip install -e ".[dev,packaging]"
-pyinstaller packaging/docuwizard.spec --noconfirm --clean
+chmod +x scripts/build-unix.sh
+./scripts/build-unix.sh
+# 결과: dist/DocuWizard/DocuWizard
 ```
+
+수동 빌드: `pip install -e ".[dev,packaging]"` 후
+`pyinstaller packaging/docuwizard.spec --noconfirm --clean`
 
 **참고**
 
 - Ollama·Tesseract는 실행 파일에 포함되지 않습니다. 사용자 PC에 각각 설치되어
   있어야 로컬 모델·이미지 OCR을 쓸 수 있습니다.
-- 첫 빌드는 PySide6를 묶어 용량이 수백니다(수백 MB).
-- macOS/Linux도 같은 spec으로 빌드할 수 있지만, 플랫폼별로 한 번씩 빌드해야 합니다.
+- 첫 빌드는 PySide6를 묶어 용량이 큽니다(수백 MB).
+- 플랫폼별로 한 번씩 빌드해야 합니다.
 
 ## 보안 안내
 
