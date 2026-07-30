@@ -7,7 +7,7 @@ from pathlib import Path
 
 from docuwizard.db import db_session
 from docuwizard.ingest.chunking import Chunk
-from docuwizard.models import Project, ProjectFile
+from docuwizard.models import FileStatus, Project, ProjectFile
 
 
 def upsert_project(project: Project, *, db: Path | None = None) -> None:
@@ -69,6 +69,50 @@ def upsert_file(file: ProjectFile, *, db: Path | None = None) -> None:
 def delete_file(file_id: str, *, db: Path | None = None) -> None:
     with db_session(db) as conn:
         conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+
+
+def list_files(project_id: str, *, db: Path | None = None) -> list[ProjectFile]:
+    with db_session(db) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM files
+            WHERE project_id = ?
+            ORDER BY added_at ASC, original_name ASC
+            """,
+            (project_id,),
+        ).fetchall()
+    return [
+        ProjectFile(
+            id=row["id"],
+            project_id=row["project_id"],
+            original_name=row["original_name"],
+            stored_name=row["stored_name"],
+            size=int(row["size"]),
+            status=FileStatus(row["status"]),
+            error=row["error"],
+            added_at=row["added_at"],
+            content_hash=row["content_hash"] if "content_hash" in row.keys() else None,
+        )
+        for row in rows
+    ]
+
+
+def get_file(file_id: str, *, db: Path | None = None) -> ProjectFile | None:
+    with db_session(db) as conn:
+        row = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
+    if row is None:
+        return None
+    return ProjectFile(
+        id=row["id"],
+        project_id=row["project_id"],
+        original_name=row["original_name"],
+        stored_name=row["stored_name"],
+        size=int(row["size"]),
+        status=FileStatus(row["status"]),
+        error=row["error"],
+        added_at=row["added_at"],
+        content_hash=row["content_hash"] if "content_hash" in row.keys() else None,
+    )
 
 
 def replace_chunks(

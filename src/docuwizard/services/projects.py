@@ -55,7 +55,6 @@ def create_project(name: str, description: str = "") -> Project:
     files_dir.mkdir(parents=True, exist_ok=False)
     project = Project(id=project_id, name=cleaned, description=description.strip())
     _write_project(project)
-    project_manifest_path(project_id).write_text("[]\n", encoding="utf-8")
     store.upsert_project(project)
     return project
 

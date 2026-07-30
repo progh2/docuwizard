@@ -17,7 +17,8 @@ dist/
 *.egg-info/
 .eggs/
 *.manifest
-*.spec
+# Ignore generated specs at repo root; keep packaging/*.spec
+/*.spec
 
 # Test / coverage / tooling
 .pytest_cache/

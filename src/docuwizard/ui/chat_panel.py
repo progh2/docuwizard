@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
@@ -31,6 +32,7 @@ class ChatPanel(QWidget):
         self._conversation_id: str | None = None
         self._worker: ChatWorker | None = None
         self._streaming_buffer = ""
+        self._stream_anchor = -1
         self._messages: list = []
         self._favorites_callback = None
 
@@ -244,6 +246,10 @@ class ChatPanel(QWidget):
         self.citation_panel.clear()
         self._streaming_buffer = ""
         self._append_transcript("도우미", "")
+        # Anchor at the start of the empty assistant body for token updates.
+        text = self.transcript.toPlainText()
+        marker = "[도우미]\n"
+        self._stream_anchor = text.rfind(marker) + len(marker)
         self.send_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.status_label.setText("준비 중…")
@@ -302,28 +308,30 @@ class ChatPanel(QWidget):
             self.citation_panel.set_chunks(chunks)
 
     def _append_transcript(self, role: str, content: str) -> None:
+        cursor = self.transcript.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         existing = self.transcript.toPlainText()
-        block = f"[{role}]\n{content}\n"
-        self.transcript.setPlainText((existing + "\n" + block).strip() + "\n")
-        self.transcript.verticalScrollBar().setValue(
-            self.transcript.verticalScrollBar().maximum()
-        )
+        prefix = "\n" if existing.strip() else ""
+        cursor.insertText(f"{prefix}[{role}]\n{content}\n")
+        self.transcript.setTextCursor(cursor)
+        self.transcript.ensureCursorVisible()
 
     def _on_status(self, message: str) -> None:
         self.status_label.setText(message)
 
     def _on_token(self, token: str) -> None:
+        """Append streamed tokens without rewriting prior messages."""
         self._streaming_buffer += token
-        text = self.transcript.toPlainText()
-        marker = "[도우미]\n"
-        idx = text.rfind(marker)
-        if idx < 0:
+        cursor = self.transcript.textCursor()
+        if self._stream_anchor < 0:
             return
-        prefix = text[: idx + len(marker)]
-        self.transcript.setPlainText(prefix + self._streaming_buffer + "\n")
-        self.transcript.verticalScrollBar().setValue(
-            self.transcript.verticalScrollBar().maximum()
+        cursor.setPosition(self._stream_anchor)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor
         )
+        cursor.insertText(self._streaming_buffer + "\n")
+        self.transcript.setTextCursor(cursor)
+        self.transcript.ensureCursorVisible()
 
     def _on_finished(self, answer: RagAnswer) -> None:
         self.send_btn.setEnabled(True)
