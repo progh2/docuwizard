@@ -30,7 +30,34 @@ def format_location(chunk: RetrievedChunk) -> str:
     return " · ".join(parts)
 
 
-def build_messages(question: str, chunks: list[RetrievedChunk]) -> list[dict[str, str]]:
+# Multi-turn context budget: keep at most this many prior messages and chars.
+HISTORY_MAX_MESSAGES = 6
+HISTORY_MAX_CHARS = 4000
+
+
+def trim_history(history: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    """Keep the most recent user/assistant turns within the context budget."""
+    if not history:
+        return []
+    recent = [m for m in history if m.get("role") in ("user", "assistant")]
+    recent = recent[-HISTORY_MAX_MESSAGES:]
+    trimmed: list[dict[str, str]] = []
+    total = 0
+    for message in reversed(recent):
+        content = str(message.get("content", ""))
+        if trimmed and total + len(content) > HISTORY_MAX_CHARS:
+            break
+        trimmed.insert(0, {"role": message["role"], "content": content})
+        total += len(content)
+    return trimmed
+
+
+def build_messages(
+    question: str,
+    chunks: list[RetrievedChunk],
+    history: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    past = trim_history(history)
     if not chunks:
         user = (
             "관련 컨텍스트가 없습니다.\n"
@@ -39,6 +66,7 @@ def build_messages(question: str, chunks: list[RetrievedChunk]) -> list[dict[str
         )
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
+            *past,
             {"role": "user", "content": user},
         ]
 
@@ -51,9 +79,11 @@ def build_messages(question: str, chunks: list[RetrievedChunk]) -> list[dict[str
     user = (
         f"컨텍스트:\n{context}\n\n"
         f"질문: {question}\n"
-        "한국어로 답하고 근거에 [doc:N]을 포함하세요."
+        "한국어로 답하고 근거에 [doc:N]을 포함하세요. "
+        "이전 대화가 있으면 그 흐름을 이어서 답하세요."
     )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
+        *past,
         {"role": "user", "content": user},
     ]

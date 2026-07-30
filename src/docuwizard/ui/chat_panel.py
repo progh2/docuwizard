@@ -82,9 +82,13 @@ class ChatPanel(QWidget):
         send_row = QHBoxLayout()
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #555;")
+        self.stop_btn = QPushButton("중단")
+        self.stop_btn.clicked.connect(self.stop_answer)
+        self.stop_btn.setEnabled(False)
         self.send_btn = QPushButton("질문하기")
         self.send_btn.clicked.connect(self.send_question)
         send_row.addWidget(self.status_label, stretch=1)
+        send_row.addWidget(self.stop_btn)
         send_row.addWidget(self.send_btn)
         right_layout.addWidget(self.transcript, stretch=3)
         right_layout.addWidget(self.citation_panel)
@@ -227,6 +231,11 @@ class ChatPanel(QWidget):
             self._conversation_id = conversation.id
             self.refresh_conversations()
 
+        history = [
+            {"role": m.role, "content": m.content}
+            for m in self._messages
+            if m.role in ("user", "assistant")
+        ]
         conversation_service.add_message(
             self._conversation_id, role="user", content=question
         )
@@ -236,13 +245,23 @@ class ChatPanel(QWidget):
         self._streaming_buffer = ""
         self._append_transcript("도우미", "")
         self.send_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         self.status_label.setText("준비 중…")
-        self._worker = ChatWorker(self._project_id, question, parent=self)
+        self._worker = ChatWorker(
+            self._project_id, question, history=history, parent=self
+        )
         self._worker.token.connect(self._on_token)
         self._worker.status.connect(self._on_status)
         self._worker.finished_ok.connect(self._on_finished)
+        self._worker.cancelled.connect(self._on_cancelled)
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
+
+    def stop_answer(self) -> None:
+        if self._worker and self._worker.isRunning():
+            self.stop_btn.setEnabled(False)
+            self.status_label.setText("중단 요청됨…")
+            self._worker.cancel()
 
     def _notify_favorites(self) -> None:
         if self._favorites_callback:
@@ -308,6 +327,7 @@ class ChatPanel(QWidget):
 
     def _on_finished(self, answer: RagAnswer) -> None:
         self.send_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.status_label.setText(f"완료 · {answer.model}")
         if not self._conversation_id:
             return
@@ -327,8 +347,22 @@ class ChatPanel(QWidget):
             conversation_service.rename_conversation(self._conversation_id, preview)
             self.refresh_conversations()
 
+    def _on_cancelled(self, partial: str) -> None:
+        self.send_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.status_label.setText("중단됨")
+        if self._conversation_id and partial.strip():
+            conversation_service.add_message(
+                self._conversation_id,
+                role="assistant",
+                content=partial.strip() + "\n\n(응답이 중단되었습니다)",
+            )
+        if self._conversation_id:
+            self._load_messages()
+
     def _on_failed(self, message: str) -> None:
         self.send_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.status_label.setText("실패")
         self._append_transcript("오류", message)
         QMessageBox.warning(self, "질의 실패", message)

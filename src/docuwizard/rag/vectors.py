@@ -1,10 +1,12 @@
-"""Vector packing and cosine search over SQLite embeddings (issue #16)."""
+"""Vector packing, cosine search, and hybrid retrieval (issues #16, #39)."""
 
 from __future__ import annotations
 
 import math
+import re
+import sqlite3
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from docuwizard.db import db_session
@@ -117,3 +119,96 @@ def search_project(
         )
     scored.sort(key=lambda item: item.score, reverse=True)
     return scored[: max(top_k, 0)]
+
+
+_WORD = re.compile(r"[0-9A-Za-z가-힣]{2,}")
+
+
+def extract_keywords(question: str, *, limit: int = 8) -> list[str]:
+    """Unique content words from the question, longest first."""
+    words = _WORD.findall(question)
+    unique = list(dict.fromkeys(words))
+    unique.sort(key=len, reverse=True)
+    return unique[:limit]
+
+
+def keyword_search_project(
+    project_id: str,
+    question: str,
+    *,
+    top_k: int = 5,
+    db: Path | None = None,
+) -> list[RetrievedChunk]:
+    """BM25-ranked FTS5 keyword search, best match first."""
+    keywords = extract_keywords(question)
+    if not keywords:
+        return []
+    match = " OR ".join(f'"{kw}"' for kw in keywords)
+    with db_session(db) as conn:
+        try:
+            rows = conn.execute(
+                """
+                SELECT c.id AS chunk_id, c.project_id, c.file_id, c.text, c.page,
+                       c.line_start, c.line_end, c.sheet, c.cell_range,
+                       f.original_name, bm25(chunks_fts) AS rank_score
+                FROM chunks_fts
+                JOIN chunks c ON c.rowid = chunks_fts.rowid
+                JOIN files f ON f.id = c.file_id
+                WHERE chunks_fts MATCH ? AND c.project_id = ?
+                ORDER BY rank_score ASC
+                LIMIT ?
+                """,
+                (match, project_id, max(top_k, 0)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [
+        RetrievedChunk(
+            chunk_id=row["chunk_id"],
+            project_id=row["project_id"],
+            file_id=row["file_id"],
+            text=row["text"],
+            score=-float(row["rank_score"]),  # bm25 is lower-is-better
+            page=row["page"],
+            line_start=row["line_start"],
+            line_end=row["line_end"],
+            sheet=row["sheet"],
+            cell_range=row["cell_range"],
+            original_name=row["original_name"],
+        )
+        for row in rows
+    ]
+
+
+def hybrid_search_project(
+    project_id: str,
+    query_vector: list[float],
+    question: str,
+    *,
+    top_k: int = 5,
+    model: str | None = None,
+    db: Path | None = None,
+) -> list[RetrievedChunk]:
+    """Fuse vector and keyword rankings with Reciprocal Rank Fusion.
+
+    RRF is robust to the incomparable score scales of cosine similarity and
+    BM25: each ranking contributes 1 / (60 + rank) per chunk.
+    """
+    pool = max(top_k, 1) * 3
+    vector_hits = search_project(
+        project_id, query_vector, top_k=pool, model=model, db=db
+    )
+    keyword_hits = keyword_search_project(project_id, question, top_k=pool, db=db)
+
+    fused: dict[str, float] = {}
+    chunks: dict[str, RetrievedChunk] = {}
+    for hits in (vector_hits, keyword_hits):
+        for rank, chunk in enumerate(hits, start=1):
+            fused[chunk.chunk_id] = fused.get(chunk.chunk_id, 0.0) + 1.0 / (60 + rank)
+            chunks.setdefault(chunk.chunk_id, chunk)
+
+    ordered = sorted(fused.items(), key=lambda item: item[1], reverse=True)
+    return [
+        replace(chunks[chunk_id], score=score)
+        for chunk_id, score in ordered[: max(top_k, 0)]
+    ]

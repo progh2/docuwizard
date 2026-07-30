@@ -41,6 +41,21 @@ class OllamaConfig:
 class OllamaClient:
     def __init__(self, config: OllamaConfig | None = None) -> None:
         self.config = config or OllamaConfig()
+        self._active_response = None
+
+    def abort(self) -> None:
+        """Close the in-flight chat stream (safe to call from another thread).
+
+        Unblocks a pending read even while waiting for the first token of a
+        slow model; the reader then fails with an error that callers should
+        treat as a cancellation.
+        """
+        response = self._active_response
+        if response is not None:
+            try:
+                response.close()
+            except Exception:  # noqa: BLE001 — best-effort close
+                pass
 
     def list_models(self) -> list[str]:
         """Return installed model names from Ollama."""
@@ -94,6 +109,7 @@ class OllamaClient:
         request = self._build_request("POST", "/api/chat", payload)
         try:
             with urllib.request.urlopen(request, timeout=self.config.timeout_sec) as resp:
+                self._active_response = resp
                 for raw_line in resp:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
@@ -123,6 +139,11 @@ class OllamaClient:
             raise OllamaError(f"Ollama HTTP {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
             raise self._wrap_url_error(exc) from exc
+        except (ValueError, OSError) as exc:
+            # Reading a response closed by abort() raises ValueError/OSError.
+            raise OllamaError("응답 스트림이 중단되었습니다.") from exc
+        finally:
+            self._active_response = None
 
     def chat(self, messages: list[dict[str, str]], *, stream: bool = False) -> str:
         if stream:

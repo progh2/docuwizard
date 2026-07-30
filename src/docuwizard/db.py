@@ -9,7 +9,7 @@ from pathlib import Path
 
 from docuwizard.paths import db_path, ensure_app_dirs
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MIGRATIONS: dict[int, str] = {
     1: """
@@ -116,6 +116,31 @@ MIGRATIONS: dict[int, str] = {
         vector BLOB NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model);
+    """,
+    # FTS5 keyword index over chunk text; the trigram tokenizer handles Korean
+    # substring matching (particles attached to words) without a morpheme
+    # analyzer. Kept in sync with the chunks table via triggers.
+    3: """
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+        text, tokenize='trigram'
+    );
+    INSERT INTO chunks_fts(rowid, text) SELECT rowid, text FROM chunks;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chunks_fts_insert
+    AFTER INSERT ON chunks BEGIN
+        INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chunks_fts_delete
+    AFTER DELETE ON chunks BEGIN
+        DELETE FROM chunks_fts WHERE rowid = old.rowid;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chunks_fts_update
+    AFTER UPDATE OF text ON chunks BEGIN
+        DELETE FROM chunks_fts WHERE rowid = old.rowid;
+        INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+    END;
     """,
 }
 
