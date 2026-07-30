@@ -63,7 +63,7 @@ class EssentialsPanel(QWidget):
             "문서에서 일정·제출물·자격·평가·의무·리스크 등 꼭 알아야 할 항목을 "
             "요약합니다. 항목을 선택해 ★로 즐겨찾기할 수 있습니다."
         )
-        hint.setStyleSheet("color: #666;")
+        hint.setObjectName("muted")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
